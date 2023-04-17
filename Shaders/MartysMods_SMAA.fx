@@ -1,20 +1,26 @@
 /*=============================================================================
                                                            
-             88        88  88  888b      88  888888888888  
-             88        88  88  8888b     88       88       
-             88        88  88  88 `8b    88       88       
- ,adPPYb,d8  88        88  88  88  `8b   88       88       
-a8"    `Y88  88        88  88  88   `8b  88       88       
-8b       88  88        88  88  88    `8b 88       88       
-"8a    ,d88  Y8a.    .a8P  88  88     `8888       88       
- `"YbbdP'88   `"Y8888Y"'   88  88      `888       88       
-         88                                                
-         88                                       
-    
+ d8b 888b     d888 888b     d888 8888888888 8888888b.   .d8888b.  8888888888 
+ Y8P 8888b   d8888 8888b   d8888 888        888   Y88b d88P  Y88b 888        
+     88888b.d88888 88888b.d88888 888        888    888 Y88b.      888        
+ 888 888Y88888P888 888Y88888P888 8888888    888   d88P  "Y888b.   8888888    
+ 888 888 Y888P 888 888 Y888P 888 888        8888888P"      "Y88b. 888        
+ 888 888  Y8P  888 888  Y8P  888 888        888 T88b         "888 888        
+ 888 888   "   888 888   "   888 888        888  T88b  Y88b  d88P 888        
+ 888 888       888 888       888 8888888888 888   T88b  "Y8888P"  8888888888                                                                 
+                                                                            
     Copyright (c) Pascal Gilcher. All rights reserved.
     
     * Unauthorized copying of this file, via any medium is strictly prohibited
  	* Proprietary and confidential
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
 
 ===============================================================================
 
@@ -169,9 +175,10 @@ texture ColorInputTex : COLOR;
 texture DepthInputTex : DEPTH;
 sampler DepthInput  { Texture = DepthInputTex; };
 
-#if __RENDERER__ >= 0xb000
- #define CS_YAY
-#endif
+#include ".\MartysMods\mmx_global.fxh"
+#include ".\MartysMods\mmx_depth.fxh"
+#include ".\MartysMods\mmx_math.fxh"
+#include ".\MartysMods\mmx_camera.fxh"
 
 texture DepthTex < pooled = true; > { 	Width = BUFFER_WIDTH;   	Height = BUFFER_HEIGHT;   	Format = R16F;  };
 texture EdgesTex < pooled = true; > {	Width = BUFFER_WIDTH;	    Height = BUFFER_HEIGHT;	    Format = RG8;   };
@@ -191,7 +198,8 @@ sampler sColorInputTexLinear{	Texture = ColorInputTex; MipFilter = POINT; MinFil
 
 sampler edgesSampler { Texture = EdgesTex;	};
 sampler blendSampler { Texture = BlendTex;  };
-#ifdef CS_YAY 
+
+#ifdef COMPUTE_SUPPORTED 
 storage stEdgesTex   { Texture = EdgesTex;  };
 storage stBlendTex   { Texture = BlendTex;  };
 storage stDepthTex   { Texture = DepthTex;  };
@@ -199,9 +207,6 @@ storage stDepthTex   { Texture = DepthTex;  };
 
 sampler areaSampler {	Texture = areaTex;	SRGBTexture = false;};
 sampler searchSampler {	Texture = searchTex; MipFilter = POINT; MinFilter = POINT; MagFilter = POINT; };
-
-#include "qUINT\Global.fxh"
-#include "qUINT\Depth.fxh"
 
 //SMAA internal
 #define SMAA_AREATEX_MAX_DISTANCE       16
@@ -799,16 +804,16 @@ float4 SMAANeighborhoodBlendingPS(float2 texcoord,
 
 VSOUT MainVS(in uint id : SV_VertexID)
 {
-    VSOUT o;VS_FullscreenTriangle(id, o.vpos, o.uv); return o;
+    VSOUT o; FullscreenTriangleVS(id, o.vpos, o.uv); return o;
 }
 
-#ifndef CS_YAY 
+#ifndef COMPUTE_SUPPORTED 
 void SMAADepthLinearizationPS(in VSOUT i, out float o : SV_Target)
 {
 	o = Depth::get_linear_depth(i.uv);
 }
 
-#else //CS_YAY  
+#else //COMPUTE_SUPPORTED  
 
 void SMAADepthLinearizationCS(in CSIN i)
 {
@@ -824,14 +829,14 @@ void SMAADepthLinearizationCS(in CSIN i)
     float4 depth_texels = tex2DgatherR(DepthInput, corrected_uv);
 #endif
 
-    depth_texels = Depth::linearize_depths(depth_texels);
+    depth_texels = Depth::linearize(depth_texels);
     tex2Dstore(stDepthTex, i.dispatchthreadid.xy * 2 + uint2(0, 1), depth_texels.x);
     tex2Dstore(stDepthTex, i.dispatchthreadid.xy * 2 + uint2(1, 1), depth_texels.y);
     tex2Dstore(stDepthTex, i.dispatchthreadid.xy * 2 + uint2(1, 0), depth_texels.z);
     tex2Dstore(stDepthTex, i.dispatchthreadid.xy * 2 + uint2(0, 0), depth_texels.w);   
 }
 
-#endif //CS_YAY 
+#endif //COMPUTE_SUPPORTED 
 
 /*=============================================================================
 	Shader Entry Points - Edge Detection
@@ -859,7 +864,7 @@ float2 SMAAEdgeDetectionWrapPS(in VSOUT i) : SV_Target
 	Shader Entry Points - Blend Weight Calculation
 =============================================================================*/
 
-#ifndef CS_YAY
+#ifndef COMPUTE_SUPPORTED
 
 void SMAABlendingWeightCalculationWrapVS(
 	in uint id : SV_VertexID,
@@ -869,7 +874,7 @@ void SMAABlendingWeightCalculationWrapVS(
 	out float4 offset[3] : TEXCOORD2
     )
 {
-	VS_FullscreenTriangle(id, position, texcoord);
+	FullscreenTriangleVS(id, position, texcoord);
 	SMAABlendingWeightCalculationVS(texcoord, pixcoord, offset);
 }
 
@@ -878,7 +883,7 @@ float4 SMAABlendingWeightCalculationWrapPS(	float4 position : SV_Position, float
 	return SMAABlendingWeightCalculationPS(texcoord, pixcoord, offset, edgesSampler, areaSampler, searchSampler, 0.0);
 }
 
-#else //CS_YAY 
+#else //COMPUTE_SUPPORTED 
 
 #define GROUP_SIZE 16
 groupshared uint grouped_work_indices[GROUP_SIZE * GROUP_SIZE + 1];//1 slot per thread + 1 counter
@@ -901,7 +906,6 @@ void SMAABlendingWeightCalculationWrapCS(in CSIN i)
 
     tex2Dstore(stBlendTex, i.dispatchthreadid.xy, blend_weights);
 }
-
 
 void SMAABlendingWeightCalculationWrapCS2(in CSIN i)
 {   
@@ -963,7 +967,7 @@ void SMAABlendingWeightCalculationWrapCS2(in CSIN i)
     }
 }
 
-#endif //CS_YAY
+#endif //COMPUTE_SUPPORTED
 
 /*=============================================================================
 	Shader Entry Points - Neighbourhood Blending
@@ -971,7 +975,7 @@ void SMAABlendingWeightCalculationWrapCS2(in CSIN i)
 
 void SMAANeighborhoodBlendingWrapVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD0, out float4 offset : TEXCOORD1)
 {
-	VS_FullscreenTriangle(id, position, texcoord);
+    FullscreenTriangleVS(id, position, texcoord);
 	SMAANeighborhoodBlendingVS(texcoord, offset);
 }
 
@@ -989,11 +993,12 @@ float3 SMAANeighborhoodBlendingWrapPS(float4 position : SV_Position,float2 texco
 	Techniques
 =============================================================================*/
 
-technique qUINT_SMAA
+technique MartysMods_AntiAliasing
 <
-    ui_label = "qUINT::SMAA";
+    ui_label = "iMMERSE Anti Aliasing";
     ui_tooltip =        
-        "                                 qUINT::SMAA                                  \n"
+        "                               MartysMods - SMAA                              \n"
+         "                   MartysMods Epic ReShade Effects (iMMERSE)                 \n"
         "______________________________________________________________________________\n"
         "\n"
 
@@ -1006,7 +1011,7 @@ technique qUINT_SMAA
         "______________________________________________________________________________";
 >
 {
-#ifdef CS_YAY
+#ifdef COMPUTE_SUPPORTED
     pass 
     { 
         ComputeShader = SMAADepthLinearizationCS<16, 16>;
