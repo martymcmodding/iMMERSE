@@ -1,20 +1,26 @@
 /*=============================================================================
                                                            
-             88        88  88  888b      88  888888888888  
-             88        88  88  8888b     88       88       
-             88        88  88  88 `8b    88       88       
- ,adPPYb,d8  88        88  88  88  `8b   88       88       
-a8"    `Y88  88        88  88  88   `8b  88       88       
-8b       88  88        88  88  88    `8b 88       88       
-"8a    ,d88  Y8a.    .a8P  88  88     `8888       88       
- `"YbbdP'88   `"Y8888Y"'   88  88      `888       88       
-         88                                                
-         88                                       
-    
+ d8b 888b     d888 888b     d888 8888888888 8888888b.   .d8888b.  8888888888 
+ Y8P 8888b   d8888 8888b   d8888 888        888   Y88b d88P  Y88b 888        
+     88888b.d88888 88888b.d88888 888        888    888 Y88b.      888        
+ 888 888Y88888P888 888Y88888P888 8888888    888   d88P  "Y888b.   8888888    
+ 888 888 Y888P 888 888 Y888P 888 888        8888888P"      "Y88b. 888        
+ 888 888  Y8P  888 888  Y8P  888 888        888 T88b         "888 888        
+ 888 888   "   888 888   "   888 888        888  T88b  Y88b  d88P 888        
+ 888 888       888 888       888 8888888888 888   T88b  "Y8888P"  8888888888                                                                 
+                                                                            
     Copyright (c) Pascal Gilcher. All rights reserved.
     
     * Unauthorized copying of this file, via any medium is strictly prohibited
  	* Proprietary and confidential
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
 
 ===============================================================================
 
