@@ -1,24 +1,31 @@
 /*=============================================================================
                                                            
-             88        88  88  888b      88  888888888888  
-             88        88  88  8888b     88       88       
-             88        88  88  88 `8b    88       88       
- ,adPPYb,d8  88        88  88  88  `8b   88       88       
-a8"    `Y88  88        88  88  88   `8b  88       88       
-8b       88  88        88  88  88    `8b 88       88       
-"8a    ,d88  Y8a.    .a8P  88  88     `8888       88       
- `"YbbdP'88   `"Y8888Y"'   88  88      `888       88       
-         88                                                
-         88                                       
-    
+ d8b 888b     d888 888b     d888 8888888888 8888888b.   .d8888b.  8888888888 
+ Y8P 8888b   d8888 8888b   d8888 888        888   Y88b d88P  Y88b 888        
+     88888b.d88888 88888b.d88888 888        888    888 Y88b.      888        
+ 888 888Y88888P888 888Y88888P888 8888888    888   d88P  "Y888b.   8888888    
+ 888 888 Y888P 888 888 Y888P 888 888        8888888P"      "Y88b. 888        
+ 888 888  Y8P  888 888  Y8P  888 888        888 T88b         "888 888        
+ 888 888   "   888 888   "   888 888        888  T88b  Y88b  d88P 888        
+ 888 888       888 888       888 8888888888 888   T88b  "Y8888P"  8888888888                                                                 
+                                                                            
     Copyright (c) Pascal Gilcher. All rights reserved.
     
     * Unauthorized copying of this file, via any medium is strictly prohibited
  	* Proprietary and confidential
 
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
 ===============================================================================
 
-    Optical Flow V2
+    Launchpad is a prepass effect that prepares various data to use 
+	in later shaders.
 
     Author:         Pascal Gilcher
 
@@ -87,19 +94,17 @@ texture DepthInputTex : DEPTH;
 sampler ColorInput 	{ Texture = ColorInputTex; };
 sampler DepthInput  { Texture = DepthInputTex; };
 
-#include "qUINT\Global.fxh"
-#include "qUINT\Depth.fxh"
-
-//integer divide, rounding up
-#define PI 3.14159265
+#include ".\MartysMods\mmx_global.fxh"
+#include ".\MartysMods\mmx_depth.fxh"
+#include ".\MartysMods\mmx_math.fxh"
 
 #define INTERP 			LINEAR
 #define FILTER_WIDE	 	true 
 #define FILTER_NARROW 	false
 
-#define BLOCK_SIZE 					2
+#define BLOCK_SIZE 					3
 #define SEARCH_OCTAVES              2
-#define OCTAVE_SAMPLES             	4	
+#define OCTAVE_SAMPLES             	4
 
 uniform uint FRAME_COUNT < source = "framecount"; >;
 
@@ -109,7 +114,7 @@ uniform uint FRAME_COUNT < source = "framecount"; >;
 texture texMotionVectors          { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F; };
 sampler sMotionVectorTex         { Texture = texMotionVectors;  };
 
-texture MotionTexIntermediate6               { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RGBA16F; };
+texture MotionTexIntermediate6               { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RGBA16F;  };
 sampler sMotionTexIntermediate6              { Texture = MotionTexIntermediate6; };
 texture MotionTexIntermediate5               { Width = BUFFER_WIDTH >> 5;   Height = BUFFER_HEIGHT >> 5;   Format = RGBA16F;  };
 sampler sMotionTexIntermediate5              { Texture = MotionTexIntermediate5; };
@@ -207,10 +212,14 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer)
 
 	i.uv -= texelsize * (BLOCK_SIZE / 2); //since we only use to sample the blocks now, offset by half a block so we can do it easier inline
 
+	float4 coeff_local = 0;
+	float4 coeff_search = 0;
+
 	[unroll] //array index not natively addressable bla...
 	for(uint k = 0; k < BLOCK_SIZE * BLOCK_SIZE; k++)
 	{
-		float2 tuv = i.uv + float2(k / BLOCK_SIZE, k % BLOCK_SIZE) * texelsize;
+		float2 offs = float2(k / BLOCK_SIZE, k % BLOCK_SIZE);
+		float2 tuv = i.uv + offs * texelsize;
 		FEATURE_TYPE t_local = get_curr_feature(tuv, level).FEATURE_COMPS; 	
 		FEATURE_TYPE t_search = get_prev_feature(tuv + total_motion, level).FEATURE_COMPS;		
 
@@ -221,10 +230,20 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer)
 		m1_search += t_search;
 		m2_search += t_search * t_search;
 		m_cov += t_local * t_search;
+
+		//float2 index_rc = (offs.xy * BLOCK_SIZE + offs.yx + 0.5) / (BLOCK_SIZE * BLOCK_SIZE);
+		//float4 wavelet = cos(index_rc.xyxy * PI * float4(1.0, 1.0, 2.0, 2.0)); 
+
+		//float4 wavelet = cos((k + 0.5) / (BLOCK_SIZE * BLOCK_SIZE) * PI * float4(1.0,2.0,4.0,8.0));
+
+		//coeff_local += t_local.x * wavelet;//pow(offs.xy * BLOCK_SIZE + offs.yx, 4);
+		//coeff_search += t_search.x * wavelet;//pow(offs.xy * BLOCK_SIZE + offs.yx, 4);
 	}
 
 	FEATURE_TYPE cossim = m_cov * rsqrt(m2_local * m2_search);
 	float best_sim = get_min_cossim(cossim);
+
+	float best_error = maxc(abs(coeff_local - coeff_search));
 
 	FEATURE_TYPE best_m1 = m1_search;
 	FEATURE_TYPE best_m2 = m2_search;
@@ -254,22 +273,35 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer)
 			m2_search = 0;
 			m_cov = 0;
 
+			coeff_search = 0;
+
 			[loop]
 			for(uint k = 0; k < BLOCK_SIZE * BLOCK_SIZE; k++)
 			{
+				float2 offs = float2(k / BLOCK_SIZE, k % BLOCK_SIZE);
 				FEATURE_TYPE t = get_prev_feature(search_center + float2(k / BLOCK_SIZE, k % BLOCK_SIZE) * texelsize, level).FEATURE_COMPS;
 
 				m1_search += t;
 				m2_search += t * t;
 				m_cov += local_block[k] * t;
+
+				//coeff_search += t.x * pow(offs.xy * BLOCK_SIZE + offs.yx, 4);
+				//float2 index_rc = (offs.xy * BLOCK_SIZE + offs.yx + 0.5) / (BLOCK_SIZE * BLOCK_SIZE);
+				//float4 wavelet = cos(index_rc.xyxy * PI * float4(1.0, 1.0, 2.0, 2.0)); 
+				//float4 wavelet = cos((k + 0.5) / (BLOCK_SIZE * BLOCK_SIZE) * PI * float4(1.0,2.0,4.0,8.0));				
+				//coeff_search += t.x * wavelet;//pow(offs.xy * BLOCK_SIZE + offs.yx, 4);
 			}
 			cossim = m_cov * rsqrt(m2_local * m2_search);
 			float sim = get_min_cossim(cossim);
 
-			[branch] //1 less register vs branch
-			if(sim > best_sim)				
+			//float error = maxc(abs(coeff_local - coeff_search));
+
+			[branch]
+			if(sim > best_sim)	
+			//if(best_error > error)				
 			{
 				best_sim = sim;
+				//best_error = error;
 				local_motion = search_offset;
 				best_m1 = m1_search;
 	            best_m2 = m2_search;		
@@ -285,136 +317,6 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer)
 	float4 curr_layer = float4(total_motion, variance, saturate(1 - acos(best_sim) / (PI * 0.5)));  //delayed sqrt for variance -> stddev
 	return curr_layer;
 }
-
-#undef BLOCK_SIZE
-#define BLOCK_SIZE 4
-
-float4 find_best_residual_motion_with_refine(VSOUT i, int level, float4 coarse_layer)
-{	
-	float2 texelsize = rcp(BUFFER_SCREEN_SIZE / exp2(level));
-	FEATURE_TYPE local_block[BLOCK_SIZE * BLOCK_SIZE];
-
-	float2 total_motion = coarse_layer.xy;
-	float coarse_sim = coarse_layer.w;
-
-	FEATURE_TYPE m1_local = 0;
-	FEATURE_TYPE m2_local = 0;
-	FEATURE_TYPE m1_search = 0;
-	FEATURE_TYPE m2_search = 0;
-	FEATURE_TYPE m_cov = 0;
-
-	i.uv -= texelsize * (BLOCK_SIZE / 2); //since we only use to sample the blocks now, offset by half a block so we can do it easier inline
-
-	[unroll] //array index not natively addressable bla...
-	for(uint k = 0; k < BLOCK_SIZE * BLOCK_SIZE; k++)
-	{
-		float2 tuv = i.uv + float2(k / BLOCK_SIZE, k % BLOCK_SIZE) * texelsize;
-		FEATURE_TYPE t_local = get_curr_feature(tuv, level).FEATURE_COMPS; 	
-		FEATURE_TYPE t_search = get_prev_feature(tuv + total_motion, level).FEATURE_COMPS;		
-
-		local_block[k] = t_local;
-
-		m1_local += t_local;
-		m2_local += t_local * t_local;
-		m1_search += t_search;
-		m2_search += t_search * t_search;
-		m_cov += t_local * t_search;
-	}
-
-	FEATURE_TYPE cossim = m_cov * rsqrt(m2_local * m2_search);
-	float best_sim = get_min_cossim(cossim);
-
-	FEATURE_TYPE best_m1 = m1_search;
-	FEATURE_TYPE best_m2 = m2_search;
-
-	float phi = radians(360.0 / OCTAVE_SAMPLES);
-	float2x2 rotsector = float2x2(cos(phi), -sin(phi), sin(phi), cos(phi));
-	float randseed = (((dot(uint2(i.vpos.xy) % 5, float2(1, 5)) * 17) % 25) + 0.5) / 25.0; //prime shuffled, similar spectral properties to bayer but faster to compute and unique values within 5x5
-	randseed = frac(randseed + SEARCH_OCTAVES * 0.6180339887498);
-	float2 randdir; sincos(randseed * phi, randdir.x, randdir.y);
-
-	int _octaves = SEARCH_OCTAVES;	
-
-	while(_octaves-- > 0)
-	{
-		_octaves = best_sim < 0.999999 ? _octaves : 0;
-		float2 local_motion = 0;
-
-		int _samples = OCTAVE_SAMPLES;
-		while(_samples-- > 0)		
-		{
-			_samples = best_sim < 0.999999 ? _samples : 0;
-			randdir = mul(randdir, rotsector);		
-			float2 search_offset = randdir * texelsize;
-			float2 search_center = i.uv + total_motion + search_offset;			 
-
-			m1_search = 0;
-			m2_search = 0;
-			m_cov = 0;
-
-			[loop]
-			for(uint k = 0; k < BLOCK_SIZE * BLOCK_SIZE; k++)
-			{
-				FEATURE_TYPE t = get_prev_feature(search_center + float2(k / BLOCK_SIZE, k % BLOCK_SIZE) * texelsize, level).FEATURE_COMPS;
-
-				m1_search += t;
-				m2_search += t * t;
-				m_cov += local_block[k] * t;
-			}
-			cossim = m_cov * rsqrt(m2_local * m2_search);
-			float sim = get_min_cossim(cossim);
-
-			[branch] //1 less register vs branch
-			if(sim > best_sim)				
-			{
-				best_sim = sim;
-				local_motion = search_offset;
-				best_m1 = m1_search;
-	            best_m2 = m2_search;		
-			}		
-		}
-		total_motion += local_motion;
-		randdir *= 0.5;
-	}
-
-	best_m1 /= BLOCK_SIZE * BLOCK_SIZE;	
-	best_m2 /= BLOCK_SIZE * BLOCK_SIZE;
-	float variance = dot(1, sqrt(abs(best_m2 - best_m1 * best_m1)));
-	float4 curr_layer = float4(total_motion, variance, saturate(1 - acos(best_sim) / (PI * 0.5)));  //delayed sqrt for variance -> stddev
-	return curr_layer;
-}
-
-
-/*
-float4 atrous_upscale(VSOUT i, int level, sampler sMotionLow, bool filter_size)
-{	
-    float2 texelsize = rcp(tex2Dsize(sMotionLow));
-	float2x2 rot90 = float2x2(0, -FILTER_RADIUS, FILTER_RADIUS, 0);
-
-	float4 gbuffer_sum = 0;
-	float wsum = 1e-6;
-	int rad = filter_size ? 2 : 1;
-
-	[loop]for(int x = -rad; x <= rad; x++)
-	[loop]for(int y = -rad; y <= rad; y++)
-	{
-		float2 offs = mul(float2(x, y), rot90) * texelsize;
-		float2 sample_uv = i.uv + offs;
-
-		float4 sample_gbuf = tex2Dlod(sMotionLow, sample_uv, 0);
-		float ws = saturate(10 - sample_gbuf.w * 10);
-		float wf = saturate(1 - sample_gbuf.b * 128.0);
-		float wm = dot(sample_gbuf.xy, sample_gbuf.xy);
-
-		float weight = exp2(-(ws + wm + wf) * 8);
-		weight *= all(saturate(sample_uv - sample_uv * sample_uv));
-		gbuffer_sum += sample_gbuf * weight;
-		wsum += weight;		
-	}
-
-	return gbuffer_sum / wsum;	
-}
-*/
 
 float4 atrous_upscale(VSOUT i, int level, sampler sMotionLow, int filter_size)
 {	
@@ -427,24 +329,60 @@ float4 atrous_upscale(VSOUT i, int level, sampler sMotionLow, int filter_size)
 	float wsum = 1e-6;
 	int rad = filter_size;
 
-	float center_z = get_curr_feature(i.uv, level).y;
-
 	[loop]for(int x = -rad; x <= rad; x++)
 	[loop]for(int y = -rad; y <= rad; y++)
 	{
 		float2 offs = mul(float2(x * abs(x), y * abs(y)), rotm) * texelsize;
 		float2 sample_uv = i.uv + offs;
-
-		float sample_z = get_curr_feature(sample_uv, level).y;
-
+		//float sample_z = get_curr_feature(sample_uv, level).y;
 		float4 sample_gbuf = tex2Dlod(sMotionLow, sample_uv, 0);
-		float wz = abs(sample_z - center_z) * 4;
 		float ws = saturate(10 - sample_gbuf.w * 10);
 		float wf = saturate(1 - sample_gbuf.b * 128.0);
 		float wm = dot(sample_gbuf.xy, sample_gbuf.xy) * 4;
 		wm *= wm;
 
-		float weight = exp2(-(wz + ws + wm + wf) * 4) * gauss[abs(x)] * gauss[abs(y)];
+		float weight = exp2(-(ws + wm + wf) * 4) * gauss[abs(x)] * gauss[abs(y)];
+		weight *= all(saturate(sample_uv - sample_uv * sample_uv));
+		gbuffer_sum += sample_gbuf * weight;
+		wsum += weight;		
+	}
+
+	gbuffer_sum /= wsum;
+	return gbuffer_sum;	
+}
+
+float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int filter_size)
+{	
+    float2 texelsize = rcp(tex2Dsize(sMotionLow));
+	float rand = frac(level * 0.2114 + (FRAME_COUNT % 16) * 0.6180339887498) * 3.1415927*0.5;
+	float2x2 rotm = float2x2(cos(rand), -sin(rand), sin(rand), cos(rand)) * FILTER_RADIUS;
+	const float4 gauss = float4(1, 0.85, 0.65, 0.45);
+
+	float4 gbuffer_sum = 0;
+	float wsum = 1e-6;
+	int rad = filter_size;
+
+	[loop]for(int x = -rad; x <= rad; x++)
+	[loop]for(int y = -rad; y <= rad; y++)
+	{
+		float2 offs = mul(float2(x * abs(x), y * abs(y)), rotm) * texelsize;
+		float2 sample_uv = i.uv + offs;	
+
+		//float sample_z = get_curr_feature(sample_uv, level).y;
+		float4 sample_gbuf = tex2Dlod(sMotionLow, sample_uv, 0);
+		float2 prev_mv = tex2Dlod(sMotionTexIntermediate0, sample_uv + sample_gbuf.xy, 0).xy;
+
+		float wd = (dot(prev_mv, sample_gbuf.xy) + 1e-7) * rcp(1e-7 + sqrt(dot(prev_mv, prev_mv) * dot(sample_gbuf.xy, sample_gbuf.xy)));
+		wd = saturate(wd);
+		wd = 1 - wd * wd;
+
+		float ws = saturate(10 - sample_gbuf.w * 10);
+		float wf = saturate(1 - sample_gbuf.b * 128.0);
+		float wm = dot(sample_gbuf.xy, sample_gbuf.xy) * 4;
+		wm *= wm;
+
+		float weight = exp2(-(ws + wm + wf + wd) * 4) * gauss[abs(x)] * gauss[abs(y)];
+
 		weight *= all(saturate(sample_uv - sample_uv * sample_uv));
 		gbuffer_sum += sample_gbuf * weight;
 		wsum += weight;		
@@ -466,52 +404,6 @@ float4 motion_pass(in VSOUT i, sampler sMotionLow, int level, int filter_size)
 	return find_best_residual_motion(i, level, prior_motion);	
 }
 
-float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int filter_size)
-{	
-    float2 texelsize = rcp(tex2Dsize(sMotionLow));
-	float rand = frac(level * 0.2114 + (FRAME_COUNT % 16) * 0.6180339887498) * 3.1415927*0.5;
-	float2x2 rotm = float2x2(cos(rand), -sin(rand), sin(rand), cos(rand)) * FILTER_RADIUS;
-	const float4 gauss = float4(1, 0.85, 0.65, 0.45);
-
-	float4 gbuffer_sum = 0;
-	float wsum = 1e-6;
-	int rad = filter_size;
-
-	float center_z = get_curr_feature(i.uv, level).y;
-
-	[loop]for(int x = -rad; x <= rad; x++)
-	[loop]for(int y = -rad; y <= rad; y++)
-	{
-		float2 offs = mul(float2(x * abs(x), y * abs(y)), rotm) * texelsize;
-		float2 sample_uv = i.uv + offs;	
-
-		float sample_z = get_curr_feature(sample_uv, level).y;
-
-		float4 sample_gbuf = tex2Dlod(sMotionLow, sample_uv, 0);
-
-		float2 prev_mv = tex2Dlod(sMotionTexIntermediate0, sample_uv + sample_gbuf.xy, 0).xy; 
-
-		float wd = (dot(prev_mv, sample_gbuf.xy) + 1e-7) * rcp(1e-7 + sqrt(dot(prev_mv, prev_mv) * dot(sample_gbuf.xy, sample_gbuf.xy)));
-		wd = saturate(wd);
-		wd = 1 - wd * wd;
-
-		float wz = abs(sample_z - center_z) * 4;
-		float ws = saturate(10 - sample_gbuf.w * 10);
-		float wf = saturate(1 - sample_gbuf.b * 128.0);
-		float wm = dot(sample_gbuf.xy, sample_gbuf.xy) * 4;
-		wm *= wm;
-
-		float weight = exp2(-(wz + ws + wm + wf + wd) * 4) * gauss[abs(x)] * gauss[abs(y)];
-
-		weight *= all(saturate(sample_uv - sample_uv * sample_uv));
-		gbuffer_sum += sample_gbuf * weight;
-		wsum += weight;		
-	}
-
-	gbuffer_sum /= wsum;
-	return gbuffer_sum;	
-}
-
 float4 motion_pass_with_temporal_filter(in VSOUT i, sampler sMotionLow, int level, int filter_size)
 {
 	float4 prior_motion = tex2Dlod(sMotionLow, i.uv, 0) * 0.95;
@@ -521,7 +413,7 @@ float4 motion_pass_with_temporal_filter(in VSOUT i, sampler sMotionLow, int leve
 	if(level < MIN_MIP)
 		return prior_motion;
 
-	return find_best_residual_motion_with_refine(i, level, prior_motion);	
+	return find_best_residual_motion(i, level, prior_motion);	
 }
 
 float3 showmotion(float2 motion)
@@ -536,10 +428,10 @@ float3 showmotion(float2 motion)
 	Shader Entry Points
 =============================================================================*/
 
-VSOUT VS_Main(in uint id : SV_VertexID)
+VSOUT MainVS(in uint id : SV_VertexID)
 {
     VSOUT o;
-    VS_FullscreenTriangle(id, o.vpos, o.uv); 
+    FullscreenTriangleVS(id, o.vpos, o.uv); 
     return o;
 }
 
@@ -581,11 +473,11 @@ void PSWriteFeature(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
 #endif
 }
 
-void PSMotion6(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate4, 6, 2);}
+void PSMotion6(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate2, 6, 2);}
 void PSMotion5(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate6, 5, 2);}
 void PSMotion4(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate5, 4, 2);}
 void PSMotion3(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate4, 3, 2);}
-void PSMotion2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate3, 2, 2);}
+void PSMotion2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate3, 2, 2);}
 void PSMotion1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate2, 1, 1);}
 void PSMotion0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate1, 0, 1);}
 
@@ -598,23 +490,36 @@ void PSOut(in VSOUT i, out float3 o : SV_Target0)
 	Techniques
 =============================================================================*/
 
-technique qUINT_OpticalFlow
+technique MartysMods_Launchpad
 <
-    ui_label = "qUINT::Optical Flow";
+    ui_label = "iMMERSE Launchpad (enable and move to the top!)";
+    ui_tooltip =        
+        "                           MartysMods - Launchpad                             \n"
+        "                   MartysMods Epic ReShade Effects (iMMERSE)                  \n"
+        "______________________________________________________________________________\n"
+        "\n"
+
+        "Launchpad is a catch-all setup shader that prepares various data for the other\n"
+        "effects. Enable this effect and move it to the top of the effect list.        \n"
+        "\n"
+        "\n"
+        "Visit https://martysmods.com for more information.                            \n"
+        "\n"       
+        "______________________________________________________________________________";
 >
 {
-    pass {VertexShader = VS_Main;PixelShader  = PSWriteFeature; RenderTarget = FeaturePyramid; } 
+    pass {VertexShader = MainVS;PixelShader  = PSWriteFeature; RenderTarget = FeaturePyramid; } 
 
-	pass {VertexShader = VS_Main;PixelShader = PSMotion6;RenderTarget = MotionTexIntermediate6;}
-    pass {VertexShader = VS_Main;PixelShader = PSMotion5;RenderTarget = MotionTexIntermediate5;}
-    pass {VertexShader = VS_Main;PixelShader = PSMotion4;RenderTarget = MotionTexIntermediate4;}
-    pass {VertexShader = VS_Main;PixelShader = PSMotion3;RenderTarget = MotionTexIntermediate3;}
-    pass {VertexShader = VS_Main;PixelShader = PSMotion2;RenderTarget = MotionTexIntermediate2;}
-    pass {VertexShader = VS_Main;PixelShader = PSMotion1;RenderTarget = MotionTexIntermediate1;}
-    pass {VertexShader = VS_Main;PixelShader = PSMotion0;RenderTarget = MotionTexIntermediate0;}
+	pass {VertexShader = MainVS;PixelShader = PSMotion6;RenderTarget = MotionTexIntermediate6;}
+    pass {VertexShader = MainVS;PixelShader = PSMotion5;RenderTarget = MotionTexIntermediate5;}
+    pass {VertexShader = MainVS;PixelShader = PSMotion4;RenderTarget = MotionTexIntermediate4;}
+    pass {VertexShader = MainVS;PixelShader = PSMotion3;RenderTarget = MotionTexIntermediate3;}
+    pass {VertexShader = MainVS;PixelShader = PSMotion2;RenderTarget = MotionTexIntermediate2;}
+    pass {VertexShader = MainVS;PixelShader = PSMotion1;RenderTarget = MotionTexIntermediate1;}
+    pass {VertexShader = MainVS;PixelShader = PSMotion0;RenderTarget = MotionTexIntermediate0;}
 
-	pass {VertexShader = VS_Main;PixelShader  = PSWriteFeature; RenderTarget = FeaturePyramidPrev; }
+	pass {VertexShader = MainVS;PixelShader  = PSWriteFeature; RenderTarget = FeaturePyramidPrev; }
 #if DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
-	pass {VertexShader = VS_Main;PixelShader  = PSOut;  } 
+	pass {VertexShader = MainVS;PixelShader  = PSOut;  } 
 #endif 
 }
