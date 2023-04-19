@@ -885,87 +885,97 @@ float4 SMAABlendingWeightCalculationWrapPS(	float4 position : SV_Position, float
 
 #else //COMPUTE_SUPPORTED 
 
-#define GROUP_SIZE 16
-groupshared uint grouped_work_indices[GROUP_SIZE * GROUP_SIZE + 1];//1 slot per thread + 1 counter
-#define DISPATCH_X CEIL_DIV(BUFFER_WIDTH, GROUP_SIZE)
-#define DISPATCH_Y CEIL_DIV(BUFFER_HEIGHT, GROUP_SIZE)
+//writes edgetex, clears blend tex for CS
+void SMAAEdgeDetectionWrapAndClearPS(in VSOUT i, out PSOUT2 o)
+{
+    float2 texcoord = i.uv;
+    //on more recent gen hw it seems faster to do compute this here rather than costing bandwidth
+    float4 offset[3]; 
+    SMAAEdgeDetectionVS(texcoord, offset);
 
-void SMAABlendingWeightCalculationWrapCS(in CSIN i)
-{  
-    float4 blend_weights = 0;
+    o.t0 = o.t1 = 0; //clear blendtex as well so the CS can be made simpler, fastest option out of many variants tested
 
     [branch]
-    if(any(tex2Dfetch(edgesSampler, i.dispatchthreadid.xy).xy))
-    {
-        float2 uv = pixel_idx_to_uv(i.dispatchthreadid.xy, BUFFER_SCREEN_SIZE);
-        float2 pixcoord;
-        float4 offset[3];
-        SMAABlendingWeightCalculationVS(uv, pixcoord, offset);    
-        blend_weights = SMAABlendingWeightCalculationPS(uv, pixcoord, offset, edgesSampler, areaSampler, searchSampler, 0.0);
-    }
-
-    tex2Dstore(stBlendTex, i.dispatchthreadid.xy, blend_weights);
+	if(EDGE_DETECTION_MODE == 0)
+		o.t0 = SMAALumaEdgePredicationDetectionPS(texcoord, offset, sColorInputTexGamma, sDepthTex);
+	else 
+    [branch]
+    if(EDGE_DETECTION_MODE == 2)
+		o.t0 = SMAADepthEdgeDetectionPS(texcoord, offset, sDepthTex);
+    else 
+	    o.t0 =  SMAAColorEdgePredicationDetectionPS(texcoord, offset, sColorInputTexGamma, sDepthTex);        
 }
 
-void SMAABlendingWeightCalculationWrapCS2(in CSIN i)
-{   
-    bool has_work = any(tex2Dfetch(edgesSampler, i.dispatchthreadid.xy).xy);
+#define GROUP_SIZE_X    16
+#define GROUP_SIZE_Y    16
+#define BATCH_SIZE      2
 
-    //init counter to 0, per thread write flag whether it has expensive work or not
-    if(i.threadid == 0) 
-        grouped_work_indices[GROUP_SIZE * GROUP_SIZE] = 0;
-    grouped_work_indices[i.threadid] = i.threadid | (has_work << 31);  //i.threadid + (has_work ? 4096 : 0);
+groupshared uint g_worker_ids[GROUP_SIZE_X * GROUP_SIZE_Y * BATCH_SIZE];//N slots per thread
+groupshared uint g_total_workers;
+
+#define DISPATCH_SIZE_X CEIL_DIV(BUFFER_WIDTH, GROUP_SIZE_X)
+#define DISPATCH_SIZE_Y CEIL_DIV(BUFFER_HEIGHT, (GROUP_SIZE_Y*BATCH_SIZE))
+
+void SMAABlendingWeightCalculationWrapCS(in CSIN i)
+{   
+    const uint2 groupsize = uint2(GROUP_SIZE_X, GROUP_SIZE_Y);
+    const uint2 working_area = groupsize * uint2(1, BATCH_SIZE);
+    const uint global_counter_idx = working_area.x * working_area.y;
+
+    if(i.threadid == 0) g_total_workers = 0;   
+    barrier(); 
+
+    [unroll]
+    for(uint batch = 0; batch < BATCH_SIZE; batch++)
+    {
+        uint id = i.threadid * BATCH_SIZE + batch;
+        uint2 pos = i.groupid.xy * working_area + uint2(id % groupsize.x, id / groupsize.x);
+
+        if(any(tex2Dfetch(edgesSampler, pos).xy))
+        {
+            uint harderworker_id = atomicAdd(g_total_workers, 1u);
+            g_worker_ids[harderworker_id] = id;     
+        }       
+    }
 
     barrier();
 
-    uint working_idx = i.threadid;
+    //load into local registers
+    uint total_work = g_total_workers;
 
-    //read counter, write own threadid at array[counter], increment counter
-    if(has_work)
+    //if we bite the bullet, a cluster of pixels with lots of AA can tank performance here
+    //but for a regular image, this is very rarely the case and since the workers are grouped
+    //this happens for the least amount of warps/wavefronts possible
+    while(i.threadid < total_work)
     {
-        uint write_idx = atomicAdd(grouped_work_indices[GROUP_SIZE * GROUP_SIZE], 1u);
-        //exchange thread ids and flags, i.e. write own thread id + work flag at array[counter]
-        //and get whatever threadid + flag was stored there before
-        working_idx = atomicExchange(grouped_work_indices[write_idx], i.threadid | (has_work << 31));
-    }
-
-    barrier();    
-    //now the tgsm layout looks like this: |random thread indices with hard work|thread indices with easy work|counter|
-
-    [branch]
-    if(i.threadid < grouped_work_indices[GROUP_SIZE * GROUP_SIZE]) //lower sector, hard working threads
-    {
-        //remove flag and recover the thread id we're substituting for
-        working_idx = grouped_work_indices[i.threadid] & 0x7FFFFFFFu; 
-        //recalculate parameters that correspond to this thread id
-        uint2 pos = i.groupid.xy * GROUP_SIZE + uint2(working_idx % GROUP_SIZE, working_idx / GROUP_SIZE);
+        uint id = g_worker_ids[i.threadid]; 
+        uint2 pos = i.groupid.xy * working_area + uint2(id % groupsize.x, id / groupsize.x);
+        
         float2 uv = pixel_idx_to_uv(pos, BUFFER_SCREEN_SIZE);
-
-        //Exchangable part: perform the hard work here
         float2 pixcoord;
         float4 offset[3];
         SMAABlendingWeightCalculationVS(uv, pixcoord, offset);    
         float4 blend_weights = SMAABlendingWeightCalculationPS(uv, pixcoord, offset, edgesSampler, areaSampler, searchSampler, 0.0);
-        tex2Dstore(stBlendTex, pos, blend_weights);          
-    }
-    else //upper sector, threads with easy work
-    {
-        if(!has_work) //no other thread substituted for us, do the cheap work and exit
-        {
-            tex2Dstore(stBlendTex, i.dispatchthreadid.xy, 0); 
-            return;
-        } 
-
-        if(working_idx & (~0x7FFFFFFFu)) //work bit set, we swapped with a thread that has expensive work on its own, which has been done already, so abort
-            return;
-
-        //our hard work has been substituted by a thread of the lower group, so we need to fill in for it
-        //recalculate parameters that correspond to this thread id and do the easy work
-        working_idx &= 0x7FFFFFFFu;
-        uint2 pos = i.groupid.xy * GROUP_SIZE + uint2(working_idx % GROUP_SIZE, working_idx / GROUP_SIZE); 
-        tex2Dstore(stBlendTex, pos, 0);
+        tex2Dstore(stBlendTex, pos, blend_weights); 
+        i.threadid += groupsize.x * groupsize.y;
     }
 }
+
+/*
+//GPU Bitonic sort
+    for(uint g = 1; g <= logn2; g++) 
+    {
+		for (uint t = g; t > 0; t--) 
+        {			
+            uint map = (i.threadid / (1u << (t - 1u))) * (1u << t) + (i.threadid % (1u << (t - 1u)));
+            uint pos = (map / (1u << g)) & 1u;
+            uint m1 = (pos == 0) ? map : (map + (1u << (t - 1u)));
+		    uint m2 = (pos != 0) ? map : (map + (1u << (t - 1u)));
+            atomicMin(grouped_work_indices[m1], atomicMax(grouped_work_indices[m2], grouped_work_indices[m1]));
+            barrier();			
+		}
+	}
+*/
 
 #endif //COMPUTE_SUPPORTED
 
@@ -1017,18 +1027,19 @@ technique MartysMods_AntiAliasing
         ComputeShader = SMAADepthLinearizationCS<16, 16>;
         DispatchSizeX = CEIL_DIV(BUFFER_WIDTH, 32); 
         DispatchSizeY = CEIL_DIV(BUFFER_HEIGHT, 32);
-    }
-    pass EdgeDetectionPass
+    } 
+    pass SMAAEdgeDetectionWrapAndClearPS
 	{
 		VertexShader = MainVS;
-		PixelShader = SMAAEdgeDetectionWrapPS;
-		RenderTarget = EdgesTex;
-    }
+		PixelShader = SMAAEdgeDetectionWrapAndClearPS;
+		RenderTarget0 = EdgesTex;
+        RenderTarget1 = BlendTex;
+    } 
     pass    
     { 
-        ComputeShader = SMAABlendingWeightCalculationWrapCS<GROUP_SIZE, GROUP_SIZE>;
-        DispatchSizeX = DISPATCH_X; 
-        DispatchSizeY = DISPATCH_Y;
+        ComputeShader = SMAABlendingWeightCalculationWrapCS<GROUP_SIZE_X, GROUP_SIZE_Y>;
+        DispatchSizeX = DISPATCH_SIZE_X; 
+        DispatchSizeY = DISPATCH_SIZE_Y;
     }
 #else 
     pass
