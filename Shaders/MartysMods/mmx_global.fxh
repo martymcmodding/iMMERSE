@@ -105,9 +105,11 @@ MED3(float)MED3(int)
 #undef MIN4
 #undef MED3
 
+float maxc(float  t) {return t;}
 float maxc(float2 t) {return max(t.x, t.y);}
 float maxc(float3 t) {return max3(t.x, t.y, t.z);}
 float maxc(float4 t) {return max4(t.x, t.y, t.z, t.w);}
+float minc(float  t) {return t;}
 float minc(float2 t) {return min(t.x, t.y);}
 float minc(float3 t) {return min3(t.x, t.y, t.z);}
 float minc(float4 t) {return min4(t.x, t.y, t.z, t.w);}
