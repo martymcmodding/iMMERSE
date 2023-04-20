@@ -180,23 +180,6 @@ float4 get_prev_feature(float2 uv, int mip)
 	return tex2Dlod(sFeaturePyramidPrev, saturate(uv), mip);
 }
 
-float get_min_cossim(FEATURE_TYPE cs)
-{
-#if MATCHING_LAYERS == 0
-	return cs.x;
-#elif MATCHING_LAYERS == 1
-	//return dot(cs, 0.5);
-	cs = saturate(cs);
-	//return cs.x * cs.y;
-	return min(cs.x, cs.y);
-#else 
-	//return dot(cs, 0.25);
-	cs = saturate(cs);
-	//return cs.x * cs.y * cs.z * cs.w;
-	return min(min(cs.x, cs.y), min(cs.z, cs.w));
-#endif
-}
-
 float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const int blocksize)
 {	
 	level = max(level - 1, 0); //sample one higher res for better quality
@@ -229,13 +212,12 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 		m_cov += t_local * t_search;
 	}
 
-	FEATURE_TYPE cossim = m_cov * rsqrt(m2_local * m2_search);
-	float best_sim = get_min_cossim(cossim);
+	float best_sim = minc(m_cov * rsqrt(m2_local * m2_search));
 
 	float phi = radians(360.0 / OCTAVE_SAMPLES);
-	float2x2 rotsector = float2x2(cos(phi), -sin(phi), sin(phi), cos(phi));
+	float4 rotator = Math::get_rotator(phi);
 	float randseed = (((dot(uint2(i.vpos.xy) % 5, float2(1, 5)) * 17) % 25) + 0.5) / 25.0; //prime shuffled, similar spectral properties to bayer but faster to compute and unique values within 5x5
-	randseed = frac(randseed + SEARCH_OCTAVES * 0.6180339887498);
+	randseed = frac(randseed + level * 0.6180339887498);
 
 	float2 randdir; sincos(randseed * phi, randdir.x, randdir.y);
 	int _octaves = SEARCH_OCTAVES + (level >= 1 ? 2 : 0);
@@ -249,7 +231,7 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 		while(_samples-- > 0)		
 		{
 			_samples = best_sim < 0.999999 ? _samples : 0;
-			randdir = mul(randdir, rotsector);		
+			randdir = Math::rotate_2D(randdir, rotator);
 			float2 search_offset = randdir * texelsize;
 			float2 search_center = i.uv + total_motion + search_offset;			 
 
@@ -260,14 +242,13 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 			for(uint k = 0; k < blocksize * blocksize; k++)
 			{
 				FEATURE_TYPE t = get_prev_feature(search_center + float2(k % blocksize, k / blocksize) * texelsize, level).FEATURE_COMPS;
-
 				m2_search += t * t;
 				m_cov += local_block[k] * t;
 			}
-			cossim = m_cov * rsqrt(m2_local * m2_search);
-			float sim = get_min_cossim(cossim);
 
-			[branch]
+			float sim = minc(m_cov * rsqrt(m2_local * m2_search));
+
+			[flatten]
 			if(sim > best_sim)
 			{
 				best_sim = sim;
@@ -335,9 +316,6 @@ float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int filte
 	float4 gbuffer_sum = 0;
 	float wsum = 1e-6;
 	int rad = filter_size;
-
-	float4 maxvec = 0;
-	float maxvecw = 0;
 
 	[loop]for(int x = -rad; x <= rad; x++)
 	[loop]for(int y = -rad; y <= rad; y++)
@@ -490,7 +468,7 @@ technique MartysMods_Launchpad
         "______________________________________________________________________________";
 >
 {
-    pass {VertexShader = MainVS;PixelShader  = PSWriteFeature; RenderTarget = FeaturePyramid; } 
+    pass {VertexShader = MainVS;PixelShader = PSWriteFeature; RenderTarget = FeaturePyramid; } 
 	pass {VertexShader = MainVS;PixelShader = PSMotion6;RenderTarget = MotionTexIntermediate6;}
     pass {VertexShader = MainVS;PixelShader = PSMotion5;RenderTarget = MotionTexIntermediate5;}
     pass {VertexShader = MainVS;PixelShader = PSMotion4;RenderTarget = MotionTexIntermediate4;}
@@ -498,9 +476,8 @@ technique MartysMods_Launchpad
     pass {VertexShader = MainVS;PixelShader = PSMotion2;RenderTarget = MotionTexIntermediate2;}
     pass {VertexShader = MainVS;PixelShader = PSMotion1;RenderTarget = MotionTexIntermediate1;}
     pass {VertexShader = MainVS;PixelShader = PSMotion0;RenderTarget = MotionTexIntermediate0;}
-
-	pass {VertexShader = MainVS;PixelShader  = PSWriteFeature; RenderTarget = FeaturePyramidPrev; }
+	pass {VertexShader = MainVS;PixelShader = PSWriteFeature; RenderTarget = FeaturePyramidPrev; }
 #if DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
-	pass {VertexShader = MainVS;PixelShader  = PSOut;  }
+	pass {VertexShader = MainVS;PixelShader  = PSOut;  }		
 #endif 
 }
