@@ -74,7 +74,7 @@
 
 uniform int EDGE_DETECTION_MODE < 
     ui_type = "combo";
-	ui_items = "Luminance edge detection\0Color edge detection\0Depth edge detection\0";
+	ui_items = "Luminance edge detection\0Color edge detection (max)\0Color edge detection (weighted)\0Depth edge detection\0";
 	ui_label = "Edge Detection Type";
 > = 1;
 
@@ -143,6 +143,7 @@ uniform int DebugOutput <
 	ui_items = "None\0View edges\0View weights\0";
 	ui_label = "Debug Output";
 > = false;
+
 /*
 uniform float4 tempF1 <
     ui_type = "drag";
@@ -180,11 +181,15 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_math.fxh"
 #include ".\MartysMods\mmx_camera.fxh"
 
+//#undef _COMPUTE_SUPPORTED
+
 texture DepthTex < pooled = true; > { 	Width = BUFFER_WIDTH;   	Height = BUFFER_HEIGHT;   	Format = R16F;  };
 texture EdgesTex < pooled = true; > {	Width = BUFFER_WIDTH;	    Height = BUFFER_HEIGHT;	    Format = RG8;   };
 texture BlendTex < pooled = true; > {	Width = BUFFER_WIDTH;   	Height = BUFFER_HEIGHT; 	Format = RGBA8; };
-texture areaTex < source = "AreaTex.png"; > {	Width = 160;	Height = 560;	Format = RG8;};
-texture searchTex < source = "SearchTex.png"; > {	Width = 64;	Height = 16;	Format = R8;};
+
+//transposing and putting it as RGBA is ever so slightly faster for some reason
+texture areaLUT < source = "AreaLUT.png"; > {	Width = 560;	Height = 80;	Format = RGBA8;};
+texture searchLUT  {	Width = 64;	Height = 16;	Format = R8;};
 
 sampler sDepthTex {	Texture = DepthTex; };
 
@@ -199,19 +204,23 @@ sampler sColorInputTexLinear{	Texture = ColorInputTex; MipFilter = POINT; MinFil
 sampler edgesSampler { Texture = EdgesTex;	};
 sampler blendSampler { Texture = BlendTex;  };
 
-#ifdef COMPUTE_SUPPORTED 
+#ifdef _COMPUTE_SUPPORTED 
 storage stEdgesTex   { Texture = EdgesTex;  };
 storage stBlendTex   { Texture = BlendTex;  };
 storage stDepthTex   { Texture = DepthTex;  };
 #endif
 
-sampler areaSampler {	Texture = areaTex;	SRGBTexture = false;};
-sampler searchSampler {	Texture = searchTex; MipFilter = POINT; MinFilter = POINT; MagFilter = POINT; };
+sampler areaLUTSampler {	Texture = areaLUT;	SRGBTexture = false;};
+sampler searchLUTSampler {	Texture = searchLUT; MipFilter = POINT; MinFilter = POINT; MagFilter = POINT; };
 
 //SMAA internal
 #define SMAA_AREATEX_MAX_DISTANCE       16
 #define SMAA_AREATEX_MAX_DISTANCE_DIAG  20
 #define SMAA_AREATEX_PIXEL_SIZE         (1.0 / float2(160.0, 560.0))
+
+#define SMAA_AREATEX_PIXEL_SIZE_NEW    (1.0 / float2(80.0, 560.0))
+
+
 #define SMAA_AREATEX_SUBTEX_SIZE        (1.0 / 7.0)
 #define SMAA_SEARCHTEX_SIZE             float2(66.0, 33.0)
 #define SMAA_SEARCHTEX_PACKED_SIZE      float2(64.0, 16.0)
@@ -306,12 +315,11 @@ void SMAANeighborhoodBlendingVS(float2 texcoord,  out float4 offset)
 
 float edge_metric(float3 A, float3 B)
 {   
-#if SMAA_USE_EXTENDED_EDGE_DETECTION != 0
-    return length(A - B);
-#else 
-     float3 t = abs(A - B);
-     return max(max(t.r, t.g), t.b);
-#endif
+    float3 t = abs(A - B);
+    if(EDGE_DETECTION_MODE == 2) 
+        return dot(abs(A - B), float3(0.229, 0.587, 0.114) * 1.33);
+    
+    return max(max(t.r, t.g), t.b);
 }
 
 float2 SMAALumaEdgePredicationDetectionPS(float2 texcoord, float4 offset[3], sampler _colorTex, sampler _predicationTex) 
@@ -446,17 +454,10 @@ float2 SMAAAreaDiag(sampler areaTex, float2 dist, float2 e, float offset)
 {
     float2 texcoord = mad(float2(SMAA_AREATEX_MAX_DISTANCE_DIAG, SMAA_AREATEX_MAX_DISTANCE_DIAG), e, dist);
 
-    // We do a scale and bias for mapping to texel space:
-    texcoord = mad(SMAA_AREATEX_PIXEL_SIZE, texcoord, 0.5 * SMAA_AREATEX_PIXEL_SIZE);
-
-    // Diagonal areas are on the second half of the texture:
-    texcoord.x += 0.5;
-
-    // Move to proper place, according to the subpixel offset:
+    texcoord = mad(SMAA_AREATEX_PIXEL_SIZE_NEW, texcoord, 0.5 * SMAA_AREATEX_PIXEL_SIZE_NEW);
     texcoord.y += SMAA_AREATEX_SUBTEX_SIZE * offset;
 
-    // Do it!
-    return SMAA_AREATEX_SELECT(tex2Dlod(areaTex, texcoord, 0));
+    return tex2Dlod(areaLUTSampler, texcoord.yx, 0).zw; //diagonals in alpha   
 }
 
 float2 SMAACalculateDiagWeights(sampler EdgesTex, sampler areaTex, float2 texcoord, float2 e, float4 subsampleIndices) 
@@ -536,16 +537,7 @@ float2 SMAACalculateDiagWeights(sampler EdgesTex, sampler areaTex, float2 texcoo
 
 float SMAASearchLength(sampler searchTex, float2 e, float offset) 
 {
-#if 0 //PG22: ALU version of the texture, it's slower :( so I leave it here to brag
-    float2 idx = floor(saturate(float2((e.x * 0.5 + offset * 0.53) * 1.486, 54.0 / 33.0 - e.y)) * float2(44.5, 33));    
-    float4 T1 = 1 - ceil(frac(idx.xyxy / 7.0 + float2(0.644, 0.075).xxyy) - float2(0.875, 0.72).xxyy);
-    float2 T2 = 1 - ceil(frac(idx / 23.0 + 0.1785) - 0.7445256);
-    float2 mask = T1.xy * T1.zw * T2;
-    float4 mask2 = ceil(saturate(1 - float4(1,1,2,0.041) * abs(idx.xxxy - float4(0.5, 7.5, 35.0, 2.0))));
-    return (0.5 + 0.5 * dot(mask2.xyz, mask2.w)) * mask.x * mask.y;
-#else 
     return SMAA_SEARCHTEX_SELECT(tex2Dfetch(searchTex, floor(float2(e.x + offset, 1 - e.y) * 33.0)));
-#endif
 }
 
 float SMAASearchXLeft(sampler EdgesTex, sampler searchTex, float2 texcoord, float end) 
@@ -608,15 +600,11 @@ float2 SMAAArea(sampler areaTex, float2 dist, float e1, float e2, float offset)
 {
     // Rounding prevents precision errors of bilinear filtering:
     float2 texcoord = mad(float2(SMAA_AREATEX_MAX_DISTANCE, SMAA_AREATEX_MAX_DISTANCE), round(4.0 * float2(e1, e2)), dist);
-    
-    // We do a scale and bias for mapping to texel space:
-    texcoord = mad(SMAA_AREATEX_PIXEL_SIZE, texcoord, 0.5 * SMAA_AREATEX_PIXEL_SIZE);
 
-    // Move to proper place, according to the subpixel offset:
+    texcoord = mad(SMAA_AREATEX_PIXEL_SIZE_NEW, texcoord, 0.5 * SMAA_AREATEX_PIXEL_SIZE_NEW);
     texcoord.y = mad(SMAA_AREATEX_SUBTEX_SIZE, offset, texcoord.y);
 
-    // Do it!
-    return SMAA_AREATEX_SELECT(tex2Dlod(areaTex, texcoord, 0));
+    return tex2Dlod(areaLUTSampler, texcoord.yx, 0).xy; //diagonals in alpha      
 }
 
 void SMAADetectHorizontalCornerPattern(sampler EdgesTex, inout float2 weights, float4 texcoord, float2 d) 
@@ -646,7 +634,6 @@ void SMAADetectVerticalCornerPattern(sampler EdgesTex, inout float2 weights, flo
     factor.x -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2( 1, 1) * BUFFER_PIXEL_SIZE, 0).g;
     factor.y -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2(-2, 0) * BUFFER_PIXEL_SIZE, 0).g;
     factor.y -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2(-2, 1) * BUFFER_PIXEL_SIZE, 0).g;
-
     weights *= saturate(factor);
 }
 
@@ -807,17 +794,17 @@ VSOUT MainVS(in uint id : SV_VertexID)
     VSOUT o; FullscreenTriangleVS(id, o.vpos, o.uv); return o;
 }
 
-#ifndef COMPUTE_SUPPORTED 
+#ifndef _COMPUTE_SUPPORTED 
 void SMAADepthLinearizationPS(in VSOUT i, out float o : SV_Target)
 {
 	o = Depth::get_linear_depth(i.uv);
 }
 
-#else //COMPUTE_SUPPORTED  
+#else //_COMPUTE_SUPPORTED  
 
 void SMAADepthLinearizationCS(in CSIN i)
 {
-    if(!check_boundaries(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE) || (!SMAA_PREDICATION && EDGE_DETECTION_MODE != 2)) return;
+    if(!check_boundaries(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE) || (!SMAA_PREDICATION && EDGE_DETECTION_MODE != 3)) return;
 
     float2 uv = pixel_idx_to_uv(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE);
     float2 corrected_uv = Depth::correct_uv(uv); //fixed for lookup 
@@ -836,7 +823,7 @@ void SMAADepthLinearizationCS(in CSIN i)
     tex2Dstore(stDepthTex, i.dispatchthreadid.xy * 2 + uint2(0, 0), depth_texels.w);   
 }
 
-#endif //COMPUTE_SUPPORTED 
+#endif //_COMPUTE_SUPPORTED 
 
 /*=============================================================================
 	Shader Entry Points - Edge Detection
@@ -854,7 +841,7 @@ float2 SMAAEdgeDetectionWrapPS(in VSOUT i) : SV_Target
 		return SMAALumaEdgePredicationDetectionPS(texcoord, offset, sColorInputTexGamma, sDepthTex);
 	else 
     [branch]
-    if(EDGE_DETECTION_MODE == 2)
+    if(EDGE_DETECTION_MODE == 3)
 		return SMAADepthEdgeDetectionPS(texcoord, offset, sDepthTex);
 
 	return SMAAColorEdgePredicationDetectionPS(texcoord, offset, sColorInputTexGamma, sDepthTex);
@@ -864,7 +851,7 @@ float2 SMAAEdgeDetectionWrapPS(in VSOUT i) : SV_Target
 	Shader Entry Points - Blend Weight Calculation
 =============================================================================*/
 
-#ifndef COMPUTE_SUPPORTED
+#ifndef _COMPUTE_SUPPORTED
 
 void SMAABlendingWeightCalculationWrapVS(
 	in uint id : SV_VertexID,
@@ -880,10 +867,10 @@ void SMAABlendingWeightCalculationWrapVS(
 
 float4 SMAABlendingWeightCalculationWrapPS(	float4 position : SV_Position, float2 texcoord : TEXCOORD0, float2 pixcoord : TEXCOORD1, float4 offset[3] : TEXCOORD2) : SV_Target
 {
-	return SMAABlendingWeightCalculationPS(texcoord, pixcoord, offset, edgesSampler, areaSampler, searchSampler, 0.0);
+	return SMAABlendingWeightCalculationPS(texcoord, pixcoord, offset, edgesSampler, areaLUTSampler, searchLUTSampler, 0.0);
 }
 
-#else //COMPUTE_SUPPORTED 
+#else //_COMPUTE_SUPPORTED 
 
 //writes edgetex, clears blend tex for CS
 void SMAAEdgeDetectionWrapAndClearPS(in VSOUT i, out PSOUT2 o)
@@ -900,7 +887,7 @@ void SMAAEdgeDetectionWrapAndClearPS(in VSOUT i, out PSOUT2 o)
 		o.t0 = SMAALumaEdgePredicationDetectionPS(texcoord, offset, sColorInputTexGamma, sDepthTex);
 	else 
     [branch]
-    if(EDGE_DETECTION_MODE == 2)
+    if(EDGE_DETECTION_MODE == 3)
 		o.t0 = SMAADepthEdgeDetectionPS(texcoord, offset, sDepthTex);
     else 
 	    o.t0 =  SMAAColorEdgePredicationDetectionPS(texcoord, offset, sColorInputTexGamma, sDepthTex);        
@@ -955,7 +942,7 @@ void SMAABlendingWeightCalculationWrapCS(in CSIN i)
         float2 pixcoord;
         float4 offset[3];
         SMAABlendingWeightCalculationVS(uv, pixcoord, offset);    
-        float4 blend_weights = SMAABlendingWeightCalculationPS(uv, pixcoord, offset, edgesSampler, areaSampler, searchSampler, 0.0);
+        float4 blend_weights = SMAABlendingWeightCalculationPS(uv, pixcoord, offset, edgesSampler, areaLUTSampler, searchLUTSampler, 0.0);
         tex2Dstore(stBlendTex, pos, blend_weights); 
         i.threadid += groupsize.x * groupsize.y;
     }
@@ -977,7 +964,7 @@ void SMAABlendingWeightCalculationWrapCS(in CSIN i)
 	}
 */
 
-#endif //COMPUTE_SUPPORTED
+#endif //_COMPUTE_SUPPORTED
 
 /*=============================================================================
 	Shader Entry Points - Neighbourhood Blending
@@ -996,12 +983,54 @@ float3 SMAANeighborhoodBlendingWrapPS(float4 position : SV_Position,float2 texco
 	if(DebugOutput == 2)
 		return tex2Dlod(blendSampler, texcoord, 0).rgb;
 
-	return SMAANeighborhoodBlendingPS(texcoord, offset, sColorInputTexLinear, blendSampler).rgb;    
+	return SMAANeighborhoodBlendingPS(texcoord, offset, sColorInputTexLinear, blendSampler).rgb;
+}
+
+float SMAAMakeLUTTexPS(in VSOUT i) : SV_Target
+{
+/*
+    uint2 p = i.vpos.xy;
+
+    uint dict = 0x306D9B;
+    uint dict2 = 0x04000003;
+
+    uint3 t = p.xyx;
+    t.xy = min(t.xy % 21u, 12);    
+
+    uint2 left = (dict >> t.xy) & 1u;
+
+    uint second = left.y & (dict2 >> min(31, (t.z - 7u * (t.z > 6u)))) & (p.y < 5);    
+    uint firstpart = left.y & (t.z > 32 ? dict >> min(28, t.z - 20u) : left.x);
+    return firstpart * 0.5 + second * 0.5;
+*/
+    float2 pos = floor(i.vpos.xy);
+    bool rightside = pos.x > 33;        
+    pos.x = pos.x % 33;
+    float2 a = max(0, abs(pos - 16.0) - 4.0) - saturate(abs(pos - 16.0) - 10.0);
+    float2 u1 = round(abs(sin(a * PI / 3.0)));
+    if(rightside) return u1.y * (saturate(1 - 0.5 * pos.x) + saturate(1 - abs(7.5 - pos.x)));
+    float h = pos.x < 16.0 && pos.y < 5.0 ? round(saturate(sin(-a.x * PI / 3.0))) : 0;
+    return (u1.x + h) * u1.y * 0.5; 
 }
 
 /*=============================================================================
 	Techniques
 =============================================================================*/
+
+technique MartysMods_AntiAliasing_Prepass
+<
+    hidden = true; 
+    enabled = true;
+	timeout = 1;
+>
+{
+    pass
+	{
+		VertexShader = MainVS;
+		PixelShader = SMAAMakeLUTTexPS;
+		RenderTarget = searchLUT;
+	}  
+}
 
 technique MartysMods_AntiAliasing
 <
@@ -1020,8 +1049,8 @@ technique MartysMods_AntiAliasing
         "\n"       
         "______________________________________________________________________________";
 >
-{
-#ifdef COMPUTE_SUPPORTED
+{     
+#ifdef _COMPUTE_SUPPORTED
     pass 
     { 
         ComputeShader = SMAADepthLinearizationCS<16, 16>;

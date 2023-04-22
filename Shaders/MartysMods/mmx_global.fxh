@@ -31,15 +31,15 @@
 #define RENDERER_VULKAN       0x20000 //>=
 
 #if __RENDERER__ >= RENDERER_D3D11
- #define COMPUTE_SUPPORTED          1
+ #define _COMPUTE_SUPPORTED          1
 #else 
- #define COMPUTE_SUPPORTED          0
+ #define _COMPUTE_SUPPORTED          0
 #endif
 
 #if __RENDERER__ >= RENDERER_D3D10
- #define BITWISE_SUPPORTED          1
+ #define _BITWISE_SUPPORTED          1
 #else 
- #define BITWISE_SUPPORTED          0
+ #define _BITWISE_SUPPORTED          0
 #endif
 
 //Frequently used things / ReShade FX extensions

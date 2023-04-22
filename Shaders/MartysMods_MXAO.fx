@@ -170,7 +170,7 @@ sampler sAOTex2 { Texture = AOTex2; };
 #include ".\MartysMods\mmx_math.fxh"
 #include ".\MartysMods\mmx_camera.fxh"
 
-#ifndef COMPUTE_SUPPORTED
+#ifndef ___COMPUTE_SUPPORTED
  #if MXAO_AO_TYPE >= 2
  #undef MXAO_AO_TYPE
  #define MXAO_AO_TYPE 1
@@ -190,7 +190,7 @@ sampler sAOTex2 { Texture = AOTex2; };
 
 uniform uint FRAMECOUNT < source = "framecount"; >;
 
-#ifdef COMPUTE_SUPPORTED
+#ifdef ___COMPUTE_SUPPORTED
 storage stZSrc       { Texture = ZSrc;            };
 storage stAOTex1       { Texture = AOTex1;        };
 storage stAOTex2       { Texture = AOTex2;        };
@@ -295,7 +295,7 @@ VSOUT MainVS(in uint id : SV_VertexID)
     return o;
 }
 
-#ifdef COMPUTE_SUPPORTED
+#ifdef ___COMPUTE_SUPPORTED
 void DepthInterleaveCS(in CSIN i)
 {
     if(!check_boundaries(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE)) return;
@@ -475,7 +475,7 @@ bool shading_rate(uint2 tile_idx)
     bool skip_pixel = false;
     switch(SHADING_RATE)
     {
-#ifdef COMPUTE_SUPPORTED //bitwise :yeahboiii:
+#ifdef ___COMPUTE_SUPPORTED //bitwise :yeahboiii:
         case 1: skip_pixel = ((tile_idx.x + tile_idx.y) & 1) ^ (FRAMECOUNT & 1); break;     
         case 2: skip_pixel = (tile_idx.x & 1 + (tile_idx.y & 1) * 2) ^ (FRAMECOUNT & 3); break; 
 #else 
@@ -485,7 +485,7 @@ bool shading_rate(uint2 tile_idx)
     }
     return skip_pixel;
 }
-#ifdef COMPUTE_SUPPORTED
+#ifdef ___COMPUTE_SUPPORTED
 void OcclusionWrapCS(in CSIN i)
 {
     //need to round up here, otherwise resolutions not divisible by interleave tile amount will cause trouble,
@@ -745,7 +745,7 @@ technique MartysMods_MXAO
         "______________________________________________________________________________";
 >
 {  
-#ifdef COMPUTE_SUPPORTED
+#ifdef ___COMPUTE_SUPPORTED
     pass 
     { 
         ComputeShader = DepthInterleaveCS<32, 32>;
