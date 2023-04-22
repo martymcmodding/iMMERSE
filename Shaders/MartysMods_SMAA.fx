@@ -930,6 +930,12 @@ void SMAABlendingWeightCalculationWrapCS(in CSIN i)
     //load into local registers
     uint total_work = g_total_workers;
 
+    //if we have a reeeally small amount of threads doing anything, skip it
+    //raising this too high can cause gaps in single antialiased lines, hence 
+    //keep it far below the width/height of a thread group
+    if(total_work < 4) 
+        return;
+
     //if we bite the bullet, a cluster of pixels with lots of AA can tank performance here
     //but for a regular image, this is very rarely the case and since the workers are grouped
     //this happens for the least amount of warps/wavefronts possible
