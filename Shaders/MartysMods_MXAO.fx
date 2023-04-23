@@ -121,7 +121,7 @@ ui_type = "radio";
                  "3: Visibility Bitmask w/ Solid Angle (like 2, only smoother)";
 >;
 
-
+/*
 uniform float4 tempF1 <
     ui_type = "drag";
     ui_min = -100.0;
@@ -139,7 +139,7 @@ uniform float4 tempF3 <
     ui_min = -100.0;
     ui_max = 100.0;
 > = float4(1,1,1,1);
-
+*/
 
 /*=============================================================================
 	Textures, Samplers, Globals, Structs
@@ -629,100 +629,6 @@ void Filter2PS(in VSOUT i, out float3 o : SV_Target0)
     o = MXAO_DEBUG_VIEW_ENABLE ? mxao : color;
 }
 
-VSOUT DrawSamplesVS(in uint id : SV_VertexID)
-{
-    VSOUT o;
-    uint vid = id % 3u;
-    uint tid = id / 3u;
-
-    o.uv.x = (vid == 2) ? 2.0 : 0.0; 
-    o.uv.y = (vid == 1) ? -1.0 : 1.0;
-
-    float2 pos; //setup triangle shape
-    pos.x = vid == 2 ? 3.0 : -1.0; //* 2 - 1
-    pos.y = vid == 1 ? 3.0 : -1.0;
-
-    pos = pos * BUFFER_PIXEL_SIZE * 2;   
-   // pos *= BUFFER_ASPECT_RATIO;
-
-    float2 center_uv = 0.5;
-
-    int sample_id = tid;
-    int curr_sample_id = 0;
-
-    //calculate origin
-    for(int x = 0; x < DEINTERLEAVE_TILE_COUNT; x++)
-    for(int y = 0; y < DEINTERLEAVE_TILE_COUNT; y++)    
-    {
-        uint2 write_pos = uint2(x, y);
-
-        float z = Camera::depth_to_z(Depth::get_linear_depth(center_uv));
-        float worldspace_radius = MXAO_SAMPLE_RADIUS * 0.5;
-        float screenspace_radius = worldspace_radius / z * 0.5;
-
-        [flatten]
-        if(MXAO_WORLDSPACE_ENABLE)
-        {
-            screenspace_radius = MXAO_SAMPLE_RADIUS * 0.03;
-            worldspace_radius = screenspace_radius * z * 2.0;
-        }
-
-        static const uint2 samples_per_preset[7] = {uint2(2, 2), uint2(4, 2), uint2(5, 4), uint2(6, 6), uint2(6, 9), uint2(8, 12), uint2(10, 24)};//8, 16, 40, 72, 90, 192, 480 samples
-        uint slice_count  = samples_per_preset[MXAO_GLOBAL_SAMPLE_QUALITY_PRESET].x;    
-        uint sample_count = samples_per_preset[MXAO_GLOBAL_SAMPLE_QUALITY_PRESET].y;  
-        float jitter = get_jitter(write_pos);    
-        float3 slice_dir = 0; sincos(jitter * PI * (6.0/slice_count), slice_dir.x, slice_dir.y);    
-        float2x2 rotslice; sincos(PI / slice_count, rotslice._21, rotslice._11); rotslice._12 = -rotslice._21; rotslice._22 = rotslice._11; 
-
-        static const float4 texture_scale = float2(1.0 / DEINTERLEAVE_TILE_COUNT, 1.0).xxyy * BUFFER_ASPECT_RATIO.xyxy;
-
-        while(slice_count-- > 0) //1 less register and a bit faster
-        {        
-            slice_dir.xy = mul(slice_dir.xy, rotslice);
-            float4 scaled_dir = (slice_dir.xy * screenspace_radius).xyxy * texture_scale; 
-            
-            for(int side = 0; side < 2; side++)
-            {                    
-                [loop]         
-                for(int _sample = 0; _sample < sample_count; _sample++)
-                {
-                    float s = (_sample + jitter) / sample_count; s *= s;  
-                    float2 tap_uv = center_uv + s * scaled_dir;
-
-                    if(curr_sample_id == sample_id)
-                    {
-                        pos += float2(tap_uv.x, 1 - tap_uv.y);  
-                        o.vpos = float4(pos * 2.0 - 1.0, saturate((x * DEINTERLEAVE_TILE_COUNT + y + 0.5) * rcp(DEINTERLEAVE_TILE_COUNT*DEINTERLEAVE_TILE_COUNT)), 1);                      
-                    }
-                    curr_sample_id++;
-                }
-                scaled_dir = -scaled_dir;
-            }
-        }        
-    }
-
-    if(curr_sample_id < sample_id) o.vpos = -100000000;   
-    return o;
-}
-
-
-
-float3 gradient(float t) 
-{
-    float h = 0.6666 * (1.0 - t*t);
-    float s = 0.75;
-    float v = 1.0 - 0.9*(1.0 - t) * (1.0 - t);
-    float3 rgb = saturate(abs((h*6.0 + float3(0.0, 4.0, 2.0) % 6.0) - 3.0) - 1.0);
-	return v * lerp(1.0, rgb, s);
-}
-
-void DrawSamplesPS(in VSOUT i, out float3 o : SV_Target0)
-{
-    if(length(i.uv - 0.5) > 0.5) discard;
-    float3 origcolor = tex2Dfetch(ColorInput, i.vpos.xy).rgb;
-    o = gradient(i.vpos.z);
-}
-
 /*=============================================================================
 	Techniques
 =============================================================================*/
@@ -765,16 +671,4 @@ technique MartysMods_MXAO
 #endif
     pass { VertexShader = MainVS; PixelShader = Filter1PS; RenderTarget = AOTex2; }
     pass { VertexShader = MainVS; PixelShader = Filter2PS; }
-    pass
-	{
-		VertexShader = DrawSamplesVS;
-		PixelShader = DrawSamplesPS;		
-		PrimitiveTopology = TRIANGLELIST;
-		VertexCount = 1500*25;
-		/*BlendEnable = true;		
-        SrcBlend = SRCALPHA; 
-		DestBlend = INVSRCALPHA;
-        RenderTarget0 = CanvasTex;
-        RenderTarget1 = CanvasNormalTex;*/
-	}
 }
