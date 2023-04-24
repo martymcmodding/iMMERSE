@@ -216,16 +216,11 @@ sampler searchLUTSampler {	Texture = searchLUT; MipFilter = POINT; MinFilter = P
 //SMAA internal
 #define SMAA_AREATEX_MAX_DISTANCE       16
 #define SMAA_AREATEX_MAX_DISTANCE_DIAG  20
-#define SMAA_AREATEX_PIXEL_SIZE         (1.0 / float2(160.0, 560.0))
-
-#define SMAA_AREATEX_PIXEL_SIZE_NEW    (1.0 / float2(80.0, 560.0))
-
-
+#define SMAA_AREATEX_PIXEL_SIZE         (1.0 / float2(80.0, 560.0))
 #define SMAA_AREATEX_SUBTEX_SIZE        (1.0 / 7.0)
 #define SMAA_SEARCHTEX_SIZE             float2(66.0, 33.0)
 #define SMAA_SEARCHTEX_PACKED_SIZE      float2(64.0, 16.0)
 #define SMAA_CORNER_ROUNDING_NORM       (float(SMAA_CORNER_ROUNDING) / 100.0)
-#define SMAA_AREATEX_SELECT(sample)     sample.rg //check!
 #define SMAA_SEARCHTEX_SELECT(sample)   sample.r
 
 //integer divide, rounding up
@@ -454,7 +449,7 @@ float2 SMAAAreaDiag(sampler areaTex, float2 dist, float2 e, float offset)
 {
     float2 texcoord = mad(float2(SMAA_AREATEX_MAX_DISTANCE_DIAG, SMAA_AREATEX_MAX_DISTANCE_DIAG), e, dist);
 
-    texcoord = mad(SMAA_AREATEX_PIXEL_SIZE_NEW, texcoord, 0.5 * SMAA_AREATEX_PIXEL_SIZE_NEW);
+    texcoord = mad(SMAA_AREATEX_PIXEL_SIZE, texcoord, 0.5 * SMAA_AREATEX_PIXEL_SIZE);
     texcoord.y += SMAA_AREATEX_SUBTEX_SIZE * offset;
 
     return tex2Dlod(areaLUTSampler, texcoord.yx, 0).zw; //diagonals in alpha   
@@ -601,7 +596,7 @@ float2 SMAAArea(sampler areaTex, float2 dist, float e1, float e2, float offset)
     // Rounding prevents precision errors of bilinear filtering:
     float2 texcoord = mad(float2(SMAA_AREATEX_MAX_DISTANCE, SMAA_AREATEX_MAX_DISTANCE), round(4.0 * float2(e1, e2)), dist);
 
-    texcoord = mad(SMAA_AREATEX_PIXEL_SIZE_NEW, texcoord, 0.5 * SMAA_AREATEX_PIXEL_SIZE_NEW);
+    texcoord = mad(SMAA_AREATEX_PIXEL_SIZE, texcoord, 0.5 * SMAA_AREATEX_PIXEL_SIZE);
     texcoord.y = mad(SMAA_AREATEX_SUBTEX_SIZE, offset, texcoord.y);
 
     return tex2Dlod(areaLUTSampler, texcoord.yx, 0).xy; //diagonals in alpha      
@@ -615,10 +610,20 @@ void SMAADetectHorizontalCornerPattern(sampler EdgesTex, inout float2 weights, f
     rounding /= leftRight.x + leftRight.y; // Reduce blending for pixels in the center of a line.
 
     float2 factor = float2(1.0, 1.0);
+
     factor.x -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2(0,  1) * BUFFER_PIXEL_SIZE, 0).r;
     factor.x -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2(1,  1) * BUFFER_PIXEL_SIZE, 0).r;
     factor.y -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2(0, -2) * BUFFER_PIXEL_SIZE, 0).r;
     factor.y -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2(1, -2) * BUFFER_PIXEL_SIZE, 0).r;
+ /*   
+if(tempF1.x > 0)
+{
+    rounding *= tempF1.y;
+    factor.x -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2(0,  2) * BUFFER_PIXEL_SIZE, 0).r;
+    factor.x -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2(1,  2) * BUFFER_PIXEL_SIZE, 0).r;
+    factor.y -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2(0, -3) * BUFFER_PIXEL_SIZE, 0).r;
+    factor.y -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2(1, -3) * BUFFER_PIXEL_SIZE, 0).r;
+}*/
     weights *= saturate(factor);
 }
 
@@ -630,10 +635,20 @@ void SMAADetectVerticalCornerPattern(sampler EdgesTex, inout float2 weights, flo
     rounding /= leftRight.x + leftRight.y;
 
     float2 factor = float2(1.0, 1.0);
+  
     factor.x -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2( 1, 0) * BUFFER_PIXEL_SIZE, 0).g;
     factor.x -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2( 1, 1) * BUFFER_PIXEL_SIZE, 0).g;
     factor.y -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2(-2, 0) * BUFFER_PIXEL_SIZE, 0).g;
     factor.y -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2(-2, 1) * BUFFER_PIXEL_SIZE, 0).g;
+ /*if(tempF1.x > 0)
+{ 
+    rounding *= tempF1.y;
+    factor.x -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2( 2, 0) * BUFFER_PIXEL_SIZE, 0).g;
+    factor.x -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2( 2, 1) * BUFFER_PIXEL_SIZE, 0).g;
+    factor.y -= rounding.x * tex2Dlod(EdgesTex, texcoord.xy + int2(-3, 0) * BUFFER_PIXEL_SIZE, 0).g;
+    factor.y -= rounding.y * tex2Dlod(EdgesTex, texcoord.zw + int2(-3, 1) * BUFFER_PIXEL_SIZE, 0).g;
+}*/
+
     weights *= saturate(factor);
 }
 
@@ -750,9 +765,9 @@ float4 SMAANeighborhoodBlendingPS(float2 texcoord,
 {
     // Fetch the blending weights for current pixel:
     float4 a;
-    a.x = tex2D(BlendTex, offset.xy).a; // Right
-    a.y = tex2D(BlendTex, offset.zw).g; // Top
-    a.wz = tex2D(BlendTex, texcoord).xz; // Bottom / Left
+    a.x = tex2Dlod(BlendTex, offset.xy, 0).a; // Right
+    a.y = tex2Dlod(BlendTex, offset.zw, 0).g; // Top
+    a.wz = tex2Dlod(BlendTex, texcoord, 0).xz; // Bottom / Left
 
     // Is there any blending weight with a value greater than 0.0?
     [branch]
