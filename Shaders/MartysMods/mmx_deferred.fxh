@@ -27,13 +27,13 @@ texture NormalsTex              { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT
 sampler sNormalsTex             { Texture = NormalsTex; };
 
 //motion vectors, RGBA16F, XY = delta uv, Z = confidence, W = depth because why not
-texture MotionVectorsTex        { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RGBA16F;   };
+texture MotionVectorsTex        { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;     };
 sampler sMotionVectorsTex       { Texture = MotionVectorsTex; };
 
 float3 get_normals(float2 uv)
 {
     float2 encoded = tex2Dlod(sNormalsTex, uv, 0).xy;
-    return octahedral_dec(encoded);
+    return Math::octahedral_dec(encoded);
 }
 
 float2 get_motion(float2 uv)

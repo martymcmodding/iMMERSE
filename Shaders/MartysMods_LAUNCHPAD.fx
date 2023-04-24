@@ -98,6 +98,7 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_global.fxh"
 #include ".\MartysMods\mmx_depth.fxh"
 #include ".\MartysMods\mmx_math.fxh"
+#include ".\MartysMods\mmx_deferred.fxh"
 
 #define INTERP 			LINEAR
 #define FILTER_WIDE	 	true 
@@ -112,8 +113,8 @@ uniform uint FRAME_COUNT < source = "framecount"; >;
 #define MAX_MIP  	6 //do not change, tied to textures
 #define MIN_MIP 	RESOLUTION_SCALE
 
-texture texMotionVectors          { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F; };
-sampler sMotionVectorTex         { Texture = texMotionVectors;  };
+//texture texMotionVectors          { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F; };
+//sampler sMotionVectorTex         { Texture = texMotionVectors;  };
 
 texture MotionTexIntermediate6               { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RGBA16F;  };
 sampler sMotionTexIntermediate6              { Texture = MotionTexIntermediate6; };
@@ -128,8 +129,8 @@ sampler sMotionTexIntermediate2              { Texture = MotionTexIntermediate2;
 texture MotionTexIntermediate1               { Width = BUFFER_WIDTH >> 1;   Height = BUFFER_HEIGHT >> 1;   Format = RGBA16F;  };
 sampler sMotionTexIntermediate1              { Texture = MotionTexIntermediate1; };
 
-#define MotionTexIntermediate0 				texMotionVectors
-#define sMotionTexIntermediate0 			sMotionVectorTex
+#define MotionTexIntermediate0 				Deferred::MotionVectorsTex
+#define sMotionTexIntermediate0 			Deferred::sMotionVectorsTex
 
 #if MATCHING_LAYERS == 0
  #define FEATURE_FORMAT 	R8 
