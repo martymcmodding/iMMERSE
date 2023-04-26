@@ -181,8 +181,6 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_math.fxh"
 #include ".\MartysMods\mmx_camera.fxh"
 
-//#undef _COMPUTE_SUPPORTED
-
 texture DepthTex < pooled = true; > { 	Width = BUFFER_WIDTH;   	Height = BUFFER_HEIGHT;   	Format = R16F;  };
 texture EdgesTex < pooled = true; > {	Width = BUFFER_WIDTH;	    Height = BUFFER_HEIGHT;	    Format = RG8;   };
 texture BlendTex < pooled = true; > {	Width = BUFFER_WIDTH;   	Height = BUFFER_HEIGHT; 	Format = RGBA8; };
@@ -204,7 +202,7 @@ sampler sColorInputTexLinear{	Texture = ColorInputTex; MipFilter = POINT; MinFil
 sampler edgesSampler { Texture = EdgesTex;	};
 sampler blendSampler { Texture = BlendTex;  };
 
-#ifdef _COMPUTE_SUPPORTED 
+#if _COMPUTE_SUPPORTED
 storage stEdgesTex   { Texture = EdgesTex;  };
 storage stBlendTex   { Texture = BlendTex;  };
 storage stDepthTex   { Texture = DepthTex;  };
@@ -809,7 +807,7 @@ VSOUT MainVS(in uint id : SV_VertexID)
     VSOUT o; FullscreenTriangleVS(id, o.vpos, o.uv); return o;
 }
 
-#ifndef _COMPUTE_SUPPORTED 
+#if _COMPUTE_SUPPORTED == 0
 void SMAADepthLinearizationPS(in VSOUT i, out float o : SV_Target)
 {
 	o = Depth::get_linear_depth(i.uv);
@@ -866,7 +864,7 @@ float2 SMAAEdgeDetectionWrapPS(in VSOUT i) : SV_Target
 	Shader Entry Points - Blend Weight Calculation
 =============================================================================*/
 
-#ifndef _COMPUTE_SUPPORTED
+#if _COMPUTE_SUPPORTED == 0
 
 void SMAABlendingWeightCalculationWrapVS(
 	in uint id : SV_VertexID,
@@ -1071,7 +1069,7 @@ technique MartysMods_AntiAliasing
         "______________________________________________________________________________";
 >
 {     
-#ifdef _COMPUTE_SUPPORTED
+#if _COMPUTE_SUPPORTED
     pass 
     { 
         ComputeShader = SMAADepthLinearizationCS<16, 16>;
