@@ -182,10 +182,10 @@ sampler sMotionTexIntermediate1              { Texture = MotionTexIntermediate1;
  #define FEATURE_COMPS 		xyzw
 #endif
 
-texture FeaturePyramid          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
-sampler sFeaturePyramid         { Texture = FeaturePyramid; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; //MIRROR helps with out of frame disocclusions
-texture FeaturePyramidPrev          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
-sampler sFeaturePyramidPrev         { Texture = FeaturePyramidPrev;MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; };
+texture FeatureLayerPyramid          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
+sampler sFeatureLayerPyramid         { Texture = FeatureLayerPyramid; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; //MIRROR helps with out of frame disocclusions
+texture FeatureLayerPyramidPrev          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
+sampler sFeatureLayerPyramidPrev         { Texture = FeatureLayerPyramidPrev;MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; };
 
 struct VSOUT
 {
@@ -208,13 +208,13 @@ struct CSIN
 float4 get_curr_feature(float2 uv, int mip)
 {
 	mip = max(0, mip - MIN_MIP);
-	return tex2Dlod(sFeaturePyramid, saturate(uv), mip);
+	return tex2Dlod(sFeatureLayerPyramid, saturate(uv), mip);
 }
 
 float4 get_prev_feature(float2 uv, int mip)
 {
 	mip = max(0, mip - MIN_MIP);
-	return tex2Dlod(sFeaturePyramidPrev, saturate(uv), mip);
+	return tex2Dlod(sFeatureLayerPyramidPrev, saturate(uv), mip);
 }
 
 float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const int blocksize)
@@ -428,6 +428,19 @@ float3 linear_to_ycocg(float3 color)
     return float3(Y, Co, Cg);
 }
 
+//turbo colormap fit, turned into MADD form
+float3 gradient(float t)
+{	
+	t = saturate(t);
+	float3 res = float3(59.2864, 2.82957, 27.3482);
+	res = mad(res, t.xxx, float3(-152.94239396, 4.2773, -89.9031));	
+	res = mad(res, t.xxx, float3(132.13108234, -14.185, 110.36276771));
+	res = mad(res, t.xxx, float3(-42.6603, 4.84297, -60.582));
+	res = mad(res, t.xxx, float3(4.61539, 2.19419, 12.6419));
+	res = mad(res, t.xxx, float3(0.135721, 0.0914026, 0.106673));
+	return saturate(res);
+}
+
 /*=============================================================================
 	Shader Entry Points
 =============================================================================*/
@@ -516,15 +529,15 @@ void DebugPS(in VSOUT i, out float3 o : SV_Target0)
 			tuv = frac(tuv);
 			int qq = q.x * 2 + q.y;
 			if(qq == 0) o = Deferred::get_normals(tuv) * 0.5 + 0.5;
-			if(qq == 1) o = Depth::get_linear_depth(tuv);
+			if(qq == 1) o = gradient(Depth::get_linear_depth(tuv));
 			if(qq == 2) o = showmotion(Deferred::get_motion(tuv));	
 			if(qq == 3) o = tex2Dlod(ColorInput, tuv, 0).rgb;	
 			break;			
 		}
 		case 1: o = showmotion(Deferred::get_motion(i.uv)); break;
 		case 2: o = Deferred::get_normals(i.uv) * 0.5 + 0.5; break;
-		case 3: o = Depth::get_linear_depth(i.uv); break;
-	}	
+		case 3: o = gradient(Depth::get_linear_depth(i.uv)); break;
+	}
 }
 #endif 
 
@@ -550,7 +563,7 @@ technique MartysMods_Launchpad
         "______________________________________________________________________________";
 >
 {
-    pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget = FeaturePyramid; } 
+    pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget = FeatureLayerPyramid; } 
 	pass {VertexShader = MainVS;PixelShader = MotionPS6;RenderTarget = MotionTexIntermediate6;}
     pass {VertexShader = MainVS;PixelShader = MotionPS5;RenderTarget = MotionTexIntermediate5;}
     pass {VertexShader = MainVS;PixelShader = MotionPS4;RenderTarget = MotionTexIntermediate4;}
@@ -558,7 +571,7 @@ technique MartysMods_Launchpad
     pass {VertexShader = MainVS;PixelShader = MotionPS2;RenderTarget = MotionTexIntermediate2;}
     pass {VertexShader = MainVS;PixelShader = MotionPS1;RenderTarget = MotionTexIntermediate1;}
     pass {VertexShader = MainVS;PixelShader = MotionPS0;RenderTarget = MotionTexIntermediate0;}
-	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget = FeaturePyramidPrev; }
+	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget = FeatureLayerPyramidPrev; }
 	pass {VertexShader = MainVS;PixelShader = NormalsPS; RenderTarget = Deferred::NormalsTex; }
 #if LAUNCHPAD_DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
 	pass {VertexShader = MainVS;PixelShader  = DebugPS;  }		
