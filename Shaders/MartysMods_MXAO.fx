@@ -651,7 +651,7 @@ technique MartysMods_MXAO
         "______________________________________________________________________________";
 >
 {  
-#ifdef _COMPUTE_SUPPORTED
+#if _COMPUTE_SUPPORTED
     pass 
     { 
         ComputeShader = DepthInterleaveCS<32, 32>;
