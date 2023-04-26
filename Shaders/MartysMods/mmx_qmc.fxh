@@ -52,9 +52,9 @@ float3 roberts3(in uint idx, in float3 seed)
     return float3(phi * idx + useed) * exp2(-32.0);  
 }
 
-float roberts1(in uint idx) {return roberts1(idx, 0.5);}
-float roberts2(in uint idx) {return roberts2(idx, 0.5.xx);}
-float roberts3(in uint idx) {return roberts3(idx, 0.5.xxx);}
+float  roberts1(in uint idx) {return roberts1(idx, 0.5);}
+float2 roberts2(in uint idx) {return roberts2(idx, 0.5.xx);}
+float3 roberts3(in uint idx) {return roberts3(idx, 0.5.xxx);}
 
 //this bins random numbers into sectors, to cover a 2D domain evenly
 //given a known number of samples. For e.g. 4x4 samples it rescales all
