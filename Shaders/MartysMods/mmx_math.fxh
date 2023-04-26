@@ -138,7 +138,6 @@ float3 octahedral_dec(float2 o)
 {
     o = o * 2.0 - 1.0;
     float3 v = float3(o.xy, 1.0 - abs(o.x) - abs(o.y));
-    float t = saturate(-v.z);
     //v.xy = v.z < 0 ? (1.0 - abs(v.yx)) * fast_sign(v.xy) : v.xy;
     float t = saturate(-v.z);
     v.xy += v.xy >= 0.0.xx ? -t.xx : t.xx;
