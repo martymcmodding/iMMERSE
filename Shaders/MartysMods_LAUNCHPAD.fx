@@ -39,16 +39,16 @@
 	Preprocessor settings
 =============================================================================*/
 
-#ifndef MATCHING_LAYERS 
- #define MATCHING_LAYERS 	1		//[0-2] 0=luma, 1=luma + depth, 2 = rgb + depth
+#ifndef OPTICAL_FLOW_MATCHING_LAYERS 
+ #define OPTICAL_FLOW_MATCHING_LAYERS 	1		//[0-2] 0=luma, 1=luma + depth, 2 = rgb + depth
 #endif
 
-#ifndef RESOLUTION_SCALE
- #define RESOLUTION_SCALE 	2		//[0-2] 0=fullres, 1=halfres, 2=quarter res
+#ifndef OPTICAL_FLOW_RESOLUTION
+ #define OPTICAL_FLOW_RESOLUTION 		1		//[0-2] 0=fullres, 1=halfres, 2=quarter res
 #endif
 
-#ifndef DEBUG_OUTPUT
- #define DEBUG_OUTPUT 	  	0		//[0 or1] 1: enables debug output of the motion vectors
+#ifndef LAUNCHPAD_DEBUG_OUTPUT
+ #define LAUNCHPAD_DEBUG_OUTPUT 	  	0		//[0 or1] 1: enables debug output of the motion vectors
 #endif
 
 /*=============================================================================
@@ -57,10 +57,45 @@
 
 uniform float FILTER_RADIUS <
 	ui_type = "drag";
-	ui_label = "Filter Smoothness";
+	ui_label = "Optical Flow Filter Smoothness";
 	ui_min = 0.0;
 	ui_max = 6.0;	
 > = 4.0;
+
+#if LAUNCHPAD_DEBUG_OUTPUT != 0
+uniform int DEBUG_MODE < 
+    ui_type = "combo";
+	ui_items = "All\0Optical Flow\0Normals\0Depth\0";
+	ui_label = "Debug Output";
+> = 0;
+#endif
+
+uniform int UIHELP <
+	ui_type = "radio";
+	ui_label = " ";	
+	ui_text ="\nDescription for preprocessor definitions:\n"
+	"\n"
+	"OPTICAL_FLOW_MATCHING_LAYERS\n"
+	"\n"
+	"Determines which data to use for optical flow\n"
+	"0: luma (fastest)\n"
+	"1: luma + depth (more accurate, slower, recommended)\n"
+	"2: YCoCg color + depth (most accurate, slowest)\n"
+	"\n"
+	"OPTICAL_FLOW_RESOLUTION\n"
+	"\n"
+	"Resolution factor for optical flow\n"
+	"0: full resolution (slowest)\n"
+	"1: half resolution (faster, recommended)\n"
+	"2: quarter resolution (fastest)\n"
+	"\n"
+	"LAUNCHPAD_DEBUG_OUTPUT\n"
+	"\n"
+	"Various debug outputs\n"
+	"0: off\n"
+	"1: on\n";
+	ui_category_closed = false;
+>;
 
 /*
 uniform float4 tempF1 <
@@ -98,6 +133,7 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_global.fxh"
 #include ".\MartysMods\mmx_depth.fxh"
 #include ".\MartysMods\mmx_math.fxh"
+#include ".\MartysMods\mmx_camera.fxh"
 #include ".\MartysMods\mmx_deferred.fxh"
 
 #define INTERP 			LINEAR
@@ -111,7 +147,7 @@ sampler DepthInput  { Texture = DepthInputTex; };
 uniform uint FRAME_COUNT < source = "framecount"; >;
 
 #define MAX_MIP  	6 //do not change, tied to textures
-#define MIN_MIP 	RESOLUTION_SCALE
+#define MIN_MIP 	OPTICAL_FLOW_RESOLUTION
 
 //texture texMotionVectors          { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F; };
 //sampler sMotionVectorTex         { Texture = texMotionVectors;  };
@@ -132,11 +168,11 @@ sampler sMotionTexIntermediate1              { Texture = MotionTexIntermediate1;
 #define MotionTexIntermediate0 				Deferred::MotionVectorsTex
 #define sMotionTexIntermediate0 			Deferred::sMotionVectorsTex
 
-#if MATCHING_LAYERS == 0
+#if OPTICAL_FLOW_MATCHING_LAYERS == 0
  #define FEATURE_FORMAT 	R8 
  #define FEATURE_TYPE 		float
  #define FEATURE_COMPS 		x
-#elif MATCHING_LAYERS == 1
+#elif OPTICAL_FLOW_MATCHING_LAYERS == 1
  #define FEATURE_FORMAT 	RG16F
  #define FEATURE_TYPE		float2
  #define FEATURE_COMPS 		xy
@@ -384,6 +420,14 @@ float3 showmotion(float2 motion)
 	return lerp(0.5, rgb, saturate(dist * 100));
 }
 
+float3 linear_to_ycocg(float3 color)
+{
+    float Y  = dot(color, float3(0.25, 0.5, 0.25));
+    float Co = dot(color, float3(0.5, 0.0, -0.5));
+    float Cg = dot(color, float3(-0.25, 0.5, -0.25));
+    return float3(Y, Co, Cg);
+}
+
 /*=============================================================================
 	Shader Entry Points
 =============================================================================*/
@@ -395,15 +439,7 @@ VSOUT MainVS(in uint id : SV_VertexID)
     return o;
 }
 
-float3 linear_to_ycocg(float3 color)
-{
-    float Y  = dot(color, float3(0.25, 0.5, 0.25));
-    float Co = dot(color, float3(0.5, 0.0, -0.5));
-    float Cg = dot(color, float3(-0.25, 0.5, -0.25));
-    return float3(Y, Co, Cg);
-}
-
-void PSWriteFeature(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
+void WriteFeaturePS(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
 {	
 	float4 feature_data = 0;
 #if MIN_MIP > 0	
@@ -422,9 +458,9 @@ void PSWriteFeature(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
 #endif	
 	feature_data.w = Depth::get_linear_depth(i.uv);	
 
-#if MATCHING_LAYERS == 0
+#if OPTICAL_FLOW_MATCHING_LAYERS == 0
 	o = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
-#elif MATCHING_LAYERS == 1
+#elif OPTICAL_FLOW_MATCHING_LAYERS == 1
 	o.x = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
 	o.y = feature_data.w;
 #else 
@@ -433,19 +469,64 @@ void PSWriteFeature(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
 #endif
 }
 
-void PSMotion6(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate2, 6, 2);}
-void PSMotion5(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate6, 5, 2);}
-void PSMotion4(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate5, 4, 2);}
-void PSMotion3(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate4, 3, 2);}
-void PSMotion2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate3, 2, 2);}
-void PSMotion1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate2, 1, 1);}
-void PSMotion0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate1, 0, 1);}
+void MotionPS6(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate2, 6, 2);}
+void MotionPS5(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate6, 5, 2);}
+void MotionPS4(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate5, 4, 2);}
+void MotionPS3(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate4, 3, 2);}
+void MotionPS2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate3, 2, 2);}
+void MotionPS1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate2, 1, 1);}
+void MotionPS0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate1, 0, 1);}
 
-void PSOut(in VSOUT i, out float3 o : SV_Target0)
-{	
-	//o = 100 * length(tex2D(sMotionTexIntermediate0, i.uv).xy);
-	o = showmotion(-tex2D(sMotionTexIntermediate0, i.uv).xy);
+void NormalsPS(in VSOUT i, out float2 o : SV_Target0)
+{
+	float3 delta = float3(BUFFER_PIXEL_SIZE, 0);
+    //similar system to Intel ASSAO/AMD CACAO/XeGTAO and friends with improved weighting and less ALU
+    float3 center = Camera::uv_to_proj(i.uv);
+    float3 deltaL = Camera::uv_to_proj(i.uv - delta.xz) - center;
+    float3 deltaR = Camera::uv_to_proj(i.uv + delta.xz) - center;   
+    float3 deltaT = Camera::uv_to_proj(i.uv - delta.zy) - center;
+    float3 deltaB = Camera::uv_to_proj(i.uv + delta.zy) - center;
+    
+    float4 zdeltaLRTB = abs(float4(deltaL.z, deltaR.z, deltaT.z, deltaB.z));
+    float4 w = zdeltaLRTB.xzyw + zdeltaLRTB.zywx;
+    w = rcp(0.001 + w * w); //inverse weighting, larger delta -> lesser weight
+
+    float3 n0 = cross(deltaT, deltaL);
+    float3 n1 = cross(deltaR, deltaT);
+    float3 n2 = cross(deltaB, deltaR);
+    float3 n3 = cross(deltaL, deltaB);
+
+    float4 finalweight = w * rsqrt(float4(dot(n0, n0), dot(n1, n1), dot(n2, n2), dot(n3, n3)));
+    float3 normal = n0 * finalweight.x + n1 * finalweight.y + n2 * finalweight.z + n3 * finalweight.w;
+    normal *= rsqrt(dot(normal, normal) + 1e-8);    
+
+	o = Math::octahedral_enc(normal);
 }
+
+#if LAUNCHPAD_DEBUG_OUTPUT != 0
+void DebugPS(in VSOUT i, out float3 o : SV_Target0)
+{	
+	o = 0;
+	switch(DEBUG_MODE)
+	{
+		case 0: //all 
+		{
+			float2 tuv = i.uv * 2.0;
+			int2 q = tuv < 1.0.xx ? int2(0,0) : int2(1,1);
+			tuv = frac(tuv);
+			int qq = q.x * 2 + q.y;
+			if(qq == 0) o = Deferred::get_normals(tuv) * 0.5 + 0.5;
+			if(qq == 1) o = Depth::get_linear_depth(tuv);
+			if(qq == 2) o = showmotion(Deferred::get_motion(tuv));	
+			if(qq == 3) o = tex2Dlod(ColorInput, tuv, 0).rgb;	
+			break;			
+		}
+		case 1: o = showmotion(Deferred::get_motion(i.uv)); break;
+		case 2: o = Deferred::get_normals(i.uv) * 0.5 + 0.5; break;
+		case 3: o = Depth::get_linear_depth(i.uv); break;
+	}	
+}
+#endif 
 
 /*=============================================================================
 	Techniques
@@ -469,16 +550,17 @@ technique MartysMods_Launchpad
         "______________________________________________________________________________";
 >
 {
-    pass {VertexShader = MainVS;PixelShader = PSWriteFeature; RenderTarget = FeaturePyramid; } 
-	pass {VertexShader = MainVS;PixelShader = PSMotion6;RenderTarget = MotionTexIntermediate6;}
-    pass {VertexShader = MainVS;PixelShader = PSMotion5;RenderTarget = MotionTexIntermediate5;}
-    pass {VertexShader = MainVS;PixelShader = PSMotion4;RenderTarget = MotionTexIntermediate4;}
-    pass {VertexShader = MainVS;PixelShader = PSMotion3;RenderTarget = MotionTexIntermediate3;}
-    pass {VertexShader = MainVS;PixelShader = PSMotion2;RenderTarget = MotionTexIntermediate2;}
-    pass {VertexShader = MainVS;PixelShader = PSMotion1;RenderTarget = MotionTexIntermediate1;}
-    pass {VertexShader = MainVS;PixelShader = PSMotion0;RenderTarget = MotionTexIntermediate0;}
-	pass {VertexShader = MainVS;PixelShader = PSWriteFeature; RenderTarget = FeaturePyramidPrev; }
-#if DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
-	pass {VertexShader = MainVS;PixelShader  = PSOut;  }		
+    pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget = FeaturePyramid; } 
+	pass {VertexShader = MainVS;PixelShader = MotionPS6;RenderTarget = MotionTexIntermediate6;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS5;RenderTarget = MotionTexIntermediate5;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS4;RenderTarget = MotionTexIntermediate4;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS3;RenderTarget = MotionTexIntermediate3;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS2;RenderTarget = MotionTexIntermediate2;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS1;RenderTarget = MotionTexIntermediate1;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS0;RenderTarget = MotionTexIntermediate0;}
+	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget = FeaturePyramidPrev; }
+	pass {VertexShader = MainVS;PixelShader = NormalsPS; RenderTarget = Deferred::NormalsTex; }
+#if LAUNCHPAD_DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
+	pass {VertexShader = MainVS;PixelShader  = DebugPS;  }		
 #endif 
 }
