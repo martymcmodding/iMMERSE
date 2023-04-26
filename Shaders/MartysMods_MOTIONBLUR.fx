@@ -84,6 +84,8 @@ texture TileTex               						{ Width = BUFFER_WIDTH/20;   Height = BUFFER
 sampler sTileTex              						{ Texture = TileTex; };
 texture TileTexDilated               				{ Width = BUFFER_WIDTH/20;   Height = BUFFER_HEIGHT/20;   Format = RG16F;  };
 sampler sTileTexDilated              				{ Texture = TileTexDilated;MipFilter=POINT; MagFilter=POINT; MinFilter=POINT; };
+texture PixelStatsTex               				{ Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
+sampler sPixelStatsTex              				{ Texture = PixelStatsTex; };
 
 struct VSOUT
 {
@@ -115,6 +117,12 @@ VSOUT MainVS(in uint id : SV_VertexID)
     return o;
 }
 
+void WriteStatsPS(in VSOUT i, out float2 o : SV_Target0)
+{
+	o.x = length(Deferred::get_motion(i.uv) * BUFFER_SCREEN_SIZE);
+	o.y = Depth::get_linear_depth(i.uv);
+}
+
 //minimize by 20 horizontally
 void TileDownsample0PS(in VSOUT i, out float2 o : SV_Target0)
 {	
@@ -137,7 +145,7 @@ void TileDownsample0PS(in VSOUT i, out float2 o : SV_Target0)
 
 	//cos angle between max and weighted avg -> 
 	float cosv = dot(safenormalize(wavg.xy), safenormalize(maxvec.xy));
-	float confidenceinmax = saturate(1.0 - cosv * 50.0);
+	float confidenceinmax = saturate(1.0 - cosv * 10.0);
 	o = lerp(wavg.xy, maxvec.xy, confidenceinmax);
 	 
 }
@@ -162,7 +170,7 @@ void TileDownsample1PS(in VSOUT i, out float2 o : SV_Target0)
 
 	//cos angle between max and weighted avg -> 
 	float cosv = dot(safenormalize(wavg.xy), safenormalize(maxvec.xy));
-	float confidenceinmax = saturate(1.0 - cosv * 50.0);
+	float confidenceinmax = saturate(1.0 - cosv * 10.0);
 	o = lerp(wavg.xy, maxvec.xy, confidenceinmax);
 }
 
@@ -189,8 +197,56 @@ float3 showmotion(float2 motion)
 
 void PSOut(in VSOUT i, out float3 o : SV_Target0)
 {	
-	//o = 100 * length(tex2D(sMotionTexIntermediate0, i.uv).xy);
-	o = showmotion(-tex2D(sTileTexDilated, i.uv).xy);
+	float2 mb_dir = tex2D(sTileTexDilated, i.uv).xy;
+	float blur_len = length(mb_dir);
+	float blur_len_pixels = length(mb_dir * BUFFER_SCREEN_SIZE);
+
+	if(blur_len_pixels < 1.0) discard;
+
+	float stride = 8.0;
+	int samples = 3 + min(blur_len_pixels / stride, 16);
+
+	float4 blursum = 0;
+
+	float centerdepth = Depth::get_linear_depth(i.uv);
+	float depthscale = 1000.0;
+	float randseed = (((dot(uint2(i.vpos.xy) % 5, float2(1, 5)) * 17) % 25) + 0.5) / 25.0 - 0.5;
+
+	for(int j = 0; j < samples; j++)
+	{
+		float2 steplen = float2(j + 0.5 + randseed, -(j + 0.5) + randseed) / samples; //gather -> need to look full radius both sides; add jitter negated on the other side to shift entire pattern
+
+		float2 uv0 = i.uv + mb_dir * steplen.x;
+		float2 uv1 = i.uv + mb_dir * steplen.y;	
+
+		//x = vector length IN PIXELS, y = depth
+		float2 stats0 = tex2Dlod(sPixelStatsTex, uv0, 0).xy;
+		float2 stats1 = tex2Dlod(sPixelStatsTex, uv1, 0).xy;
+
+		float2 steplen_pixels = abs(steplen) * blur_len_pixels;
+
+		//mask samples based on range
+		float2 spreadcmp0 = saturate(1.0 + float2(blur_len_pixels, stats0.x) - steplen_pixels);
+		float2 spreadcmp1 = saturate(1.0 + float2(blur_len_pixels, stats1.x) - steplen_pixels);	
+
+		//returns two weights for fg and bg that sum 1
+		float2 depthcmp0  = saturate(0.5 + float2(depthscale, -depthscale) * (stats0.y - centerdepth));
+		float2 depthcmp1  = saturate(0.5 + float2(depthscale, -depthscale) * (stats1.y - centerdepth));
+
+		float w0 = dot(spreadcmp0, depthcmp0);
+		float w1 = dot(spreadcmp1, depthcmp1);
+
+		bool2 mirror = bool2(stats0.y > stats1.y, stats1.x > stats0.x);
+		w0 = all(mirror) ? w1 : w0;
+		w1 = any(mirror) ? w1 : w0;
+
+		blursum += w0 * float4(tex2Dlod(ColorInput, uv0, 0).rgb, 1);
+		blursum += w1 * float4(tex2Dlod(ColorInput, uv1, 0).rgb, 1);		
+	}
+
+	blursum /= 2 * samples;
+	float3 centercolor = tex2Dlod(ColorInput, i.uv, 0).rgb;
+	o = blursum.rgb + (1 - blursum.w) * centercolor;
 }
 
 /*=============================================================================
@@ -218,7 +274,6 @@ technique MartysMods_Motionblur
     pass {VertexShader = MainVS; PixelShader  = TileDownsample0PS; RenderTarget = TileDownsampleIntermediateTex; }
 	pass {VertexShader = MainVS; PixelShader  = TileDownsample1PS; RenderTarget = TileTex; }	
 	pass {VertexShader = MainVS; PixelShader  = TileDilatePS;      RenderTarget = TileTexDilated; }	
+	pass {VertexShader = MainVS; PixelShader  = WriteStatsPS; 		RenderTarget = PixelStatsTex; }
 	pass {VertexShader = MainVS;PixelShader  = PSOut;  }	
-	
-
 }
