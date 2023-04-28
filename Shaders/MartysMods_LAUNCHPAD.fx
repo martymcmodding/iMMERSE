@@ -511,9 +511,8 @@ void NormalsPS(in VSOUT i, out float2 o : SV_Target0)
 
     float4 finalweight = w * rsqrt(float4(dot(n0, n0), dot(n1, n1), dot(n2, n2), dot(n3, n3)));
     float3 normal = n0 * finalweight.x + n1 * finalweight.y + n2 * finalweight.z + n3 * finalweight.w;
-    normal *= rsqrt(dot(normal, normal) + 1e-8);    
-
-	o = Math::octahedral_enc(normal);
+    normal *= rsqrt(dot(normal, normal) + 1e-8);
+	o = Math::octahedral_enc(-normal); //fixes bugs in RTGI, normal.z positive gives smaller error :)
 }
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0

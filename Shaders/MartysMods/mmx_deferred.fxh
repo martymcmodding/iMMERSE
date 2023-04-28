@@ -33,7 +33,7 @@ sampler sMotionVectorsTex       { Texture = MotionVectorsTex; };
 float3 get_normals(float2 uv)
 {
     float2 encoded = tex2Dlod(sNormalsTex, uv, 0).xy;
-    return Math::octahedral_dec(encoded);
+    return -Math::octahedral_dec(encoded); //fixes bugs in RTGI, positive z gives better precision
 }
 
 float2 get_motion(float2 uv)
