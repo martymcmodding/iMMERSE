@@ -193,7 +193,7 @@ void MainPS(in VSOUT i, out float3 o : SV_Target0)
 
     const float3 lumc = float3(0.2126729, 0.7151522, 0.072175);
     float sharplum = dot(sharpened, lumc);
-    float origlum = dot(c.rgb, lumc);
+    float origlum = dot(c.rgb, lumc) + 1e-3;
 
     o = lerp(c.rgb / origlum * sharplum, sharpened, 0.5); //a little bit of chroma sharpen
 }
