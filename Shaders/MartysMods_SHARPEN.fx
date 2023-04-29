@@ -128,7 +128,8 @@ void MainPS(in VSOUT i, out float3 o : SV_Target0)
     if(QUALITY > 0)
     {
         c = fetch_tap_w_depth(i, int2(0, 0));
-        prev = c.rgb;
+        kernel += float4(c.rgb, 1.0);
+        prev = c.rgb;        
 
         [unroll]        
         for(int j = 0; j < 2; j++)
@@ -159,7 +160,9 @@ void MainPS(in VSOUT i, out float3 o : SV_Target0)
     else 
     {
         c = fetch_tap(i, int2(0, 0));
+        kernel += float4(c.rgb, 1.0);
         prev = c.rgb;
+
         [unroll]
         for(int j = 0; j < 2; j++)
         {
@@ -193,7 +196,7 @@ void MainPS(in VSOUT i, out float3 o : SV_Target0)
 
     const float3 lumc = float3(0.2126729, 0.7151522, 0.072175);
     float sharplum = dot(sharpened, lumc);
-    float origlum = dot(c.rgb, lumc) + 1e-3;
+    float origlum = dot(c.rgb, lumc) + 1e-6;
 
     o = lerp(c.rgb / origlum * sharplum, sharpened, 0.5); //a little bit of chroma sharpen
 }
