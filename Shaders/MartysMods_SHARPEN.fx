@@ -85,12 +85,12 @@ struct VSOUT
 
 float4 fetch_tap(VSOUT i, int2 offs)
 {
-    return float4(tex2Doffset(ColorInput, i.uv, offs).rgb, 1);    
+    return float4(tex2Dlod(ColorInput, i.uv + offs * BUFFER_PIXEL_SIZE, 0).rgb, 1);    
 }
 
 float4 fetch_tap_w_depth(VSOUT i, int2 offs)
 {
-    return float4(tex2Doffset(ColorInput, i.uv, offs).rgb, Depth::get_linear_depth(i.uv + offs * BUFFER_PIXEL_SIZE));
+    return float4(tex2Dlod(ColorInput, i.uv + offs * BUFFER_PIXEL_SIZE, 0).rgb, Depth::get_linear_depth(i.uv + offs * BUFFER_PIXEL_SIZE));
 }
 
 float3 soft_min(float3 a, float3 b)

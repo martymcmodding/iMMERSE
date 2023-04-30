@@ -325,8 +325,8 @@ float2 SMAALumaEdgePredicationDetectionPS(float2 texcoord, float4 offset[3], sam
     float3 weights = float3(0.2126, 0.7152, 0.0722);
     float L = dot(tex2D(_colorTex, texcoord).rgb, weights);
 
-    float Lleft = dot(tex2D(_colorTex, offset[0].xy).rgb, weights);
-    float Ltop  = dot(tex2D(_colorTex, offset[0].zw).rgb, weights);
+    float Lleft = dot(tex2Dlod(_colorTex, offset[0].xy, 0).rgb, weights);
+    float Ltop  = dot(tex2Dlod(_colorTex, offset[0].zw, 0).rgb, weights);
 
     float4 delta;
     delta.xy = abs(L - float2(Lleft, Ltop));
@@ -334,14 +334,14 @@ float2 SMAALumaEdgePredicationDetectionPS(float2 texcoord, float4 offset[3], sam
 
     if (dot(edges, float2(1.0, 1.0)) == 0.0) return 0;
 
-    float Lright   = dot(tex2D(_colorTex, offset[1].xy).rgb, weights);
-    float Lbottom  = dot(tex2D(_colorTex, offset[1].zw).rgb, weights);
+    float Lright   = dot(tex2Dlod(_colorTex, offset[1].xy, 0).rgb, weights);
+    float Lbottom  = dot(tex2Dlod(_colorTex, offset[1].zw, 0).rgb, weights);
     delta.zw = abs(L - float2(Lright, Lbottom));
 
     float2 maxDelta = max(delta.xy, delta.zw);    
 
-    float Lleftleft = dot(tex2D(_colorTex, offset[2].xy).rgb, weights);
-    float Ltoptop = dot(tex2D(_colorTex, offset[2].zw).rgb, weights);
+    float Lleftleft = dot(tex2Dlod(_colorTex, offset[2].xy, 0).rgb, weights);
+    float Ltoptop = dot(tex2Dlod(_colorTex, offset[2].zw, 0).rgb, weights);
     delta.zw = abs(float2(Lleft, Ltop) - float2(Lleftleft, Ltoptop));
 
     maxDelta = max(maxDelta.xy, delta.zw);    
@@ -359,27 +359,27 @@ float2 SMAAColorEdgePredicationDetectionPS(float2 texcoord, float4 offset[3], sa
         threshold = SMAACalculatePredicatedThreshold(texcoord, offset, _predicationTex);
 
     float4 delta;
-    float3 C = tex2D(_colorTex, texcoord).rgb;
+    float3 C = tex2Dlod(_colorTex, texcoord, 0).rgb;
 
-    float3 Cleft = tex2D(_colorTex, offset[0].xy).rgb;
+    float3 Cleft = tex2Dlod(_colorTex, offset[0].xy, 0).rgb;
     delta.x = edge_metric(C, Cleft);
-    float3 Ctop  = tex2D(_colorTex, offset[0].zw).rgb;
+    float3 Ctop  = tex2Dlod(_colorTex, offset[0].zw, 0).rgb;
     delta.y = edge_metric(C, Ctop);
 
     float2 edges = step(threshold, delta.xy);
     if (dot(edges, 1.0) == 0.0) return 0;
 
-    float3 Cright = tex2D(_colorTex, offset[1].xy).rgb;
+    float3 Cright = tex2Dlod(_colorTex, offset[1].xy, 0).rgb;
     delta.z = edge_metric(C, Cright);
-    float3 Cbottom  = tex2D(_colorTex, offset[1].zw).rgb;
+    float3 Cbottom  = tex2Dlod(_colorTex, offset[1].zw, 0).rgb;
     delta.w = edge_metric(C, Cbottom);
 
     float2 maxDelta = max(delta.xy, delta.zw);  
 
-    float3 Cleftleft  = tex2D(_colorTex, offset[2].xy).rgb;
+    float3 Cleftleft  = tex2Dlod(_colorTex, offset[2].xy, 0).rgb;
     delta.z = edge_metric(Cleft, Cleftleft);
 
-    float3 Ctoptop = tex2D(_colorTex, offset[2].zw).rgb;
+    float3 Ctoptop = tex2Dlod(_colorTex, offset[2].zw, 0).rgb;
     delta.w = edge_metric(Ctop, Ctoptop);
 
     maxDelta = max(maxDelta.xy, delta.zw);  

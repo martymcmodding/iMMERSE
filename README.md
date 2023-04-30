@@ -50,10 +50,6 @@ iMMERSE Launchpad is a prepass for several of the iMMERSE and iMMERSE Pro effect
 
 ![Launchpad debug output](https://abload.de/img/desktopscreenshot2023wqfdz.png)
 
-## iMMERSE Motion Blur
-
-iMMERSE Motion Blur is a higher-end motion blur effect, using the optical flow vectors calculated by iMMERSE Launchpad to perform a directional blur on fast-moving objects. It is designed to only bridge the gap between consecutive frames, i.e. blur exactly the distance that objects traveled from one frame to the next. As such, it is parameter-free and its impact lessens the higher the framerate. Unlike other ReShade motion blur shaders, it is capable of correctly handling object edges and translucency.
-
 ## iMMERSE Sharpen
 
 iMMERSE Sharpen is a depth-aware sharpening filter that leverages both depth and color to increase local contrast in desired areas, while avoiding many common artifacts usually found in sharpen algorithms, such as haloing around objects.
