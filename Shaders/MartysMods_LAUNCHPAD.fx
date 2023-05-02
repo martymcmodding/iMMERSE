@@ -296,10 +296,10 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 		randdir *= 0.5;
 	}
 
-	m1_local /= BLOCK_SIZE * BLOCK_SIZE;	
-	m2_local /= BLOCK_SIZE * BLOCK_SIZE;
+	m1_local /= blocksize * blocksize;	
+	m2_local /= blocksize * blocksize; //thanks vortigern :)
 	float variance = dot(1, sqrt(abs(m2_local - m1_local * m1_local)));
-	float4 curr_layer = float4(total_motion, variance, saturate(1 - acos(best_sim) / (PI * 0.5)));  //delayed sqrt for variance -> stddev
+	float4 curr_layer = float4(total_motion, variance, saturate(1 - acos(best_sim) / (PI * 0.5)));  
 	return curr_layer;
 }
 
