@@ -23,7 +23,7 @@ namespace Sampling
 {
 
 //for LUTs, when the volumes are placed below each other
-float4 sample_volume_bilinear(sampler s, float3 uvw, int3 size, int atlas_idx)
+float4 sample_volume_trilinear(sampler s, float3 uvw, int3 size, int atlas_idx)
 {
     uvw = saturate(uvw);
     uvw = uvw * size - uvw;
@@ -60,22 +60,22 @@ float4 sample_volume_tetrahedral(sampler s, float3 uvw, int3 size, int atlas_idx
     float minv = dot(minaxis, delta);
     float medv = dot(1 - maxaxis - minaxis, delta);
 
-    float4 lattice_weights = float4(1, maxv, medv, minv);
-    lattice_weights.xyz -= lattice_weights.yzw;
+    float4 w = float4(1, maxv, medv, minv);
+    w.xyz -= w.yzw;
 
     //3D coords of the 2 dynamic interpolants in the lattice    
     int3 cmin = lerp(c111, c000, minaxis);
     int3 cmax = lerp(c000, c111, maxaxis);
 
-    return  tex2Dfetch(s, int2(c000.x + c000.z * size.x, c000.y + size.y * atlas_idx)) * lattice_weights.x      
-          + tex2Dfetch(s, int2(cmax.x + cmax.z * size.x, cmax.y + size.y * atlas_idx)) * lattice_weights.y
-          + tex2Dfetch(s, int2(cmin.x + cmin.z * size.x, cmin.y + size.y * atlas_idx)) * lattice_weights.z
-          + tex2Dfetch(s, int2(c111.x + c111.z * size.x, c111.y + size.y * atlas_idx)) * lattice_weights.w;
+    return  tex2Dfetch(s, int2(c000.x + c000.z * size.x, c000.y + size.y * atlas_idx)) * w.x      
+          + tex2Dfetch(s, int2(cmax.x + cmax.z * size.x, cmax.y + size.y * atlas_idx)) * w.y
+          + tex2Dfetch(s, int2(cmin.x + cmin.z * size.x, cmin.y + size.y * atlas_idx)) * w.z
+          + tex2Dfetch(s, int2(c111.x + c111.z * size.x, c111.y + size.y * atlas_idx)) * w.w;
 }
 
 float4 tex3D(sampler s, float3 uvw, int3 size)
 {
-    return sample_volume_bilinear(s, uvw, size, 0);
+    return sample_volume_trilinear(s, uvw, size, 0);
 }
 
 float4 sample_bicubic(sampler s, float2 iuv, int2 size)
