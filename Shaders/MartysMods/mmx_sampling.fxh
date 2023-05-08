@@ -119,7 +119,7 @@ float4 sample_biquadratic(sampler s, float2 iuv, int2 size)
 		  + tex2Dlod(s, uv.zy, 0)) * 0.25;
 }
 
-float4 tex2Dbiquadratic(sampler, float2 iuv)
+float4 tex2Dbiquadratic(sampler s, float2 iuv)
 {
     return sample_biquadratic(s, iuv, tex2Dsize(s));
 }
