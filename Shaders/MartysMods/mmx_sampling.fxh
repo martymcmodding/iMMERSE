@@ -124,4 +124,46 @@ float4 tex2Dbiquadratic(sampler s, float2 iuv)
     return sample_biquadratic(s, iuv, tex2Dsize(s));
 }
 
+float4 sample_tricubic(sampler s, float3 uvw, int3 size, int atlas_idx)
+{
+    //end condition, no way to handle this easily without potentially introducing wrong values    
+    if(any(abs(uvw - 0.5) > 0.5 - rcp(size) * 0.5))
+        return tex3D(s, uvw, size, atlas_idx);
+
+    uvw = saturate(uvw) * size;
+    float3 tc = floor(uvw - 0.5) + 0.5;
+
+    float3 f = uvw - tc;
+    float3 f2 = f * f;
+    float3 f3 = f2 * f;
+
+    float3 w0 = f2 - 0.5 * (f3 + f);
+    float3 w1 = 1.5 * f3 - 2.5 * f2 + 1;
+    float3 w3 = 0.5 * (f3 - f2);
+
+    float3 s0 = w0 + w1; 
+
+    float3 t0 = tc - 1 + w1 / s0;
+    float3 t1 = tc + 1 + w3 / (1 - s0); 
+
+    t0 /= size; t1 /= size;
+
+    float4 X00 = lerp(tex3D(s, float3(t1.x, t0.y, t0.z), size, atlas_idx),
+                      tex3D(s, float3(t0.x, t0.y, t0.z), size, atlas_idx), s0.x);
+
+    float4 X10 = lerp(tex3D(s, float3(t1.x, t1.y, t0.z), size, atlas_idx),
+                      tex3D(s, float3(t0.x, t1.y, t0.z), size, atlas_idx), s0.x);
+
+    float4 XX0 = lerp(X10, X00,  s0.y);
+
+    float4 X01 = lerp(tex3D(s, float3(t1.x, t0.y, t1.z), size, atlas_idx),
+                      tex3D(s, float3(t0.x, t0.y, t1.z), size, atlas_idx), s0.x);
+
+    float4 X11 = lerp(tex3D(s, float3(t1.x, t1.y, t1.z), size, atlas_idx),
+                      tex3D(s, float3(t0.x, t1.y, t1.z), size, atlas_idx), s0.x);
+
+    float4 XX1 = lerp(X11, X01,  s0.y);
+    return lerp(XX1, XX0,  s0.z);
+}
+
 }

@@ -332,7 +332,8 @@ float2 SMAALumaEdgePredicationDetectionPS(float2 texcoord, float4 offset[3], sam
     delta.xy = abs(L - float2(Lleft, Ltop));
     float2 edges = step(threshold, delta.xy);
 
-    if (dot(edges, float2(1.0, 1.0)) == 0.0) return 0;
+    //if (dot(edges, float2(1.0, 1.0)) == 0.0) return 0;
+     if(edges.x == -edges.y) discard;
 
     float Lright   = dot(tex2Dlod(_colorTex, offset[1].xy, 0).rgb, weights);
     float Lbottom  = dot(tex2Dlod(_colorTex, offset[1].zw, 0).rgb, weights);
@@ -367,7 +368,8 @@ float2 SMAAColorEdgePredicationDetectionPS(float2 texcoord, float4 offset[3], sa
     delta.y = edge_metric(C, Ctop);
 
     float2 edges = step(threshold, delta.xy);
-    if (dot(edges, 1.0) == 0.0) return 0;
+    //if (dot(edges, 1.0) == 0.0) return 0;
+    if(edges.x == -edges.y) discard;
 
     float3 Cright = tex2Dlod(_colorTex, offset[1].xy, 0).rgb;
     delta.z = edge_metric(C, Cright);
@@ -395,8 +397,9 @@ float2 SMAADepthEdgeDetectionPS(float2 texcoord, float4 offset[3], sampler Depth
     float2 delta = abs(neighbours.xx - float2(neighbours.y, neighbours.z));
     float2 edges = step(SMAA_DEPTH_THRESHOLD, delta);
 
-    if (dot(edges, float2(1.0, 1.0)) == 0.0)
-        return 0;
+    //if (dot(edges, float2(1.0, 1.0)) == 0.0)
+    //    return 0;
+     if(edges.x == -edges.y) discard;
 
     return edges;
 }
@@ -770,6 +773,7 @@ float4 SMAANeighborhoodBlendingPS(float2 texcoord,
     // Is there any blending weight with a value greater than 0.0?
     [branch]
     if (dot(a, 1) < 1e-5) 
+   //if (((a.x + a.z) + (a.y + a.w)) < 1e-5)
     {
         discard;
     } 
@@ -1080,6 +1084,7 @@ technique MartysMods_AntiAliasing
 	{
 		VertexShader = MainVS;
 		PixelShader = SMAAEdgeDetectionWrapAndClearPS;
+        ClearRenderTargets = true;
 		RenderTarget0 = EdgesTex;
         RenderTarget1 = BlendTex;
     } 
