@@ -80,7 +80,7 @@ uniform int UIHELP <
 	"Determines which data to use for optical flow\n"
 	"0: luma (fastest)\n"
 	"1: luma + depth (more accurate, slower, recommended)\n"
-	"2: YCoCg color + depth (most accurate, slowest)\n"
+	"2: luma + depth + centroid axis (most accurate, slowest)\n"
 	"\n"
 	"OPTICAL_FLOW_RESOLUTION\n"
 	"\n"
@@ -133,6 +133,7 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_global.fxh"
 #include ".\MartysMods\mmx_depth.fxh"
 #include ".\MartysMods\mmx_math.fxh"
+#include ".\MartysMods\mmx_qmc.fxh"
 #include ".\MartysMods\mmx_camera.fxh"
 #include ".\MartysMods\mmx_deferred.fxh"
 
@@ -144,6 +145,7 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #define SEARCH_OCTAVES              2
 #define OCTAVE_SAMPLES             	4
 
+uniform float TIMER < source = "timer"; >;
 uniform uint FRAME_COUNT < source = "framecount"; >;
 
 #define MAX_MIP  	6 //do not change, tied to textures
@@ -151,6 +153,10 @@ uniform uint FRAME_COUNT < source = "framecount"; >;
 
 //texture texMotionVectors          { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F; };
 //sampler sMotionVectorTex         { Texture = texMotionVectors;  };
+
+uniform bool R_down < source = "key"; keycode = 0x52; mode = ""; >;
+uniform bool T_down < source = "key"; keycode = 0x54; mode = ""; >;
+
 
 texture MotionTexIntermediate6               { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RGBA16F;  };
 sampler sMotionTexIntermediate6              { Texture = MotionTexIntermediate6; };
@@ -183,7 +189,7 @@ sampler sMotionTexIntermediate1              { Texture = MotionTexIntermediate1;
 #endif
 
 texture FeatureLayerPyramid          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
-sampler sFeatureLayerPyramid         { Texture = FeatureLayerPyramid; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; //MIRROR helps with out of frame disocclusions
+sampler sFeatureLayerPyramid         { Texture = FeatureLayerPyramid; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; //giving each pyramid a different address mode helps with out of frame disocclusions - data rarely matches so the matching is often going to produce bad scores
 texture FeatureLayerPyramidPrev          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
 sampler sFeatureLayerPyramidPrev         { Texture = FeatureLayerPyramidPrev;MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; };
 
@@ -223,7 +229,7 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 	float2 texelsize = rcp(BUFFER_SCREEN_SIZE / exp2(level));
 	FEATURE_TYPE local_block[16];
 
-	float2 total_motion = coarse_layer.xy;
+	float2 total_motion = coarse_layer.xy * 0.996;
 	float coarse_sim = coarse_layer.w;
 
 	FEATURE_TYPE m1_local = 0;
@@ -231,13 +237,14 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 	FEATURE_TYPE m2_search = 0;
 	FEATURE_TYPE m_cov = 0;
 
-	i.uv -= texelsize * (blocksize / 2); //since we only use to sample the blocks now, offset by half a block so we can do it easier inline
+	float search_scale = 3;
+	i.uv -= texelsize * (blocksize / 2) * search_scale; //since we only use to sample the blocks now, offset by half a block so we can do it easier inline
 
 	[unroll] //array index not natively addressable bla...
 	for(uint k = 0; k < blocksize * blocksize; k++)
 	{
 		float2 offs = float2(k % blocksize, k / blocksize);
-		float2 tuv = i.uv + offs * texelsize;
+		float2 tuv = i.uv + offs * texelsize * search_scale;
 		FEATURE_TYPE t_local = get_curr_feature(tuv, level).FEATURE_COMPS; 	
 		FEATURE_TYPE t_search = get_prev_feature(tuv + total_motion, level).FEATURE_COMPS;		
 
@@ -247,15 +254,19 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 		m2_local += t_local * t_local;
 		m2_search += t_search * t_search;
 		m_cov += t_local * t_search;
-	}
+	}	
 
+	float variance = dot(1, abs(m2_local.x / (blocksize * blocksize) - m1_local.x * m1_local.x / ((blocksize * blocksize)*(blocksize * blocksize))));
 	float best_sim = minc(m_cov * rsqrt(m2_local * m2_search));
 
+	//this fixes completely white areas from polluting the buffer with false offsets
+	if(variance < exp(-32.0) || best_sim > 0.999999) 
+		return float4(coarse_layer.xy, 0, 0);
+
 	float phi = radians(360.0 / OCTAVE_SAMPLES);
-	float4 rotator = Math::get_rotator(phi);
+	float4 rotator = Math::get_rotator(phi);	
 	float randseed = (((dot(uint2(i.vpos.xy) % 5, float2(1, 5)) * 17) % 25) + 0.5) / 25.0; //prime shuffled, similar spectral properties to bayer but faster to compute and unique values within 5x5
 	randseed = frac(randseed + level * 0.6180339887498);
-
 	float2 randdir; sincos(randseed * phi, randdir.x, randdir.y);
 	int _octaves = SEARCH_OCTAVES + (level >= 1 ? 2 : 0);
 
@@ -278,27 +289,22 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 			[loop]
 			for(uint k = 0; k < blocksize * blocksize; k++)
 			{
-				FEATURE_TYPE t = get_prev_feature(search_center + float2(k % blocksize, k / blocksize) * texelsize, level).FEATURE_COMPS;
+				FEATURE_TYPE t = get_prev_feature(search_center + float2(k % blocksize, k / blocksize) * texelsize * search_scale, level).FEATURE_COMPS;
 				m2_search += t * t;
 				m_cov += local_block[k] * t;
 			}
 
-			float sim = minc(m_cov * rsqrt(m2_local * m2_search));
-
-			[flatten]
-			if(sim > best_sim)
-			{
-				best_sim = sim;
-				local_motion = search_offset;	
-			}				
+			float sim = minc(m_cov * rsqrt(m2_local * m2_search));			
+			if(sim < best_sim) continue;
+			
+			best_sim = sim;
+			local_motion = search_offset;	
+							
 		}
 		total_motion += local_motion;
 		randdir *= 0.5;
 	}
 
-	m1_local /= blocksize * blocksize;	
-	m2_local /= blocksize * blocksize; //thanks vortigern :)
-	float variance = dot(1, sqrt(abs(m2_local - m1_local * m1_local)));
 	float4 curr_layer = float4(total_motion, variance, saturate(1 - acos(best_sim) / (PI * 0.5)));  
 	return curr_layer;
 }
@@ -328,7 +334,7 @@ float4 atrous_upscale(VSOUT i, int level, sampler sMotionLow, int filter_size)
 		float vv = dot(sample_mv, sample_mv);
 
 		float ws = saturate(1.0 - sample_sim);
-		float wf = saturate(1 - sample_var * 128.0);
+		float wf = saturate(1 - sample_var * 128.0) * 3;
 
 		float wm = dot(sample_gbuf.xy, sample_gbuf.xy) * 4;
 
@@ -373,7 +379,8 @@ float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int filte
 
 		float wd = 3.0 * diff;		
 		float ws = saturate(1.0 - sample_sim);
-		float wf = saturate(1 - sample_var * 128.0);
+
+		float wf = saturate(1 - sample_var * 128.0) * 3;
 
 		float wm = dot(sample_gbuf.xy, sample_gbuf.xy) * 4;
 
@@ -388,7 +395,7 @@ float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int filte
 	return gbuffer_sum;	
 }
 
-float4 motion_pass(in VSOUT i, sampler sMotionLow, int level, int filter_size)
+float4 motion_pass(in VSOUT i, sampler sMotionLow, int level, int filter_size, int block_size)
 {
 	float4 prior_motion = tex2Dlod(sMotionLow, i.uv, 0) * 0.95;
     if(level < MAX_MIP)
@@ -397,10 +404,10 @@ float4 motion_pass(in VSOUT i, sampler sMotionLow, int level, int filter_size)
 	if(level < MIN_MIP)
 		return prior_motion;
 
-	return find_best_residual_motion(i, level, prior_motion, 2);	
+	return find_best_residual_motion(i, level, prior_motion, block_size);	
 }
 
-float4 motion_pass_with_temporal_filter(in VSOUT i, sampler sMotionLow, int level, int filter_size)
+float4 motion_pass_with_temporal_filter(in VSOUT i, sampler sMotionLow, int level, int filter_size, int block_size)
 {
 	float4 prior_motion = tex2Dlod(sMotionLow, i.uv, 0) * 0.95;
     if(level < MAX_MIP)
@@ -409,7 +416,7 @@ float4 motion_pass_with_temporal_filter(in VSOUT i, sampler sMotionLow, int leve
 	if(level < MIN_MIP)
 		return prior_motion;
 
-	return find_best_residual_motion(i, level, prior_motion, 3);	
+	return find_best_residual_motion(i, level, prior_motion, block_size);	
 }
 
 float3 showmotion(float2 motion)
@@ -418,14 +425,6 @@ float3 showmotion(float2 motion)
 	float dist = length(motion);
 	float3 rgb = saturate(3 * abs(2 * frac(angle / 6.283 + float3(0, -1.0/3.0, 1.0/3.0)) - 1) - 1);
 	return lerp(0.5, rgb, saturate(dist * 100));
-}
-
-float3 linear_to_ycocg(float3 color)
-{
-    float Y  = dot(color, float3(0.25, 0.5, 0.25));
-    float Co = dot(color, float3(0.5, 0.0, -0.5));
-    float Cg = dot(color, float3(-0.25, 0.5, -0.25));
-    return float3(Y, Co, Cg);
 }
 
 //turbo colormap fit, turned into MADD form
@@ -439,6 +438,20 @@ float3 gradient(float t)
 	res = mad(res, t.xxx, float3(4.61539, 2.19419, 12.6419));
 	res = mad(res, t.xxx, float3(0.135721, 0.0914026, 0.106673));
 	return saturate(res);
+}
+
+float2 centroid_dir(float2 uv)
+{
+	const float2 offs[16] = {float2(-1, -3),float2(0, -3),float2(1, -3),float2(2, -2),float2(3, -1),float2(3, 0),float2(3, 1),float2(2,2),float2(1,3),float2(0,3),float2(-1,3),float2(-2,2),float2(-3,1),float2(-3,0),float2(-3,-1),float2(-2,-2)};
+	float4 moments = 0;
+	[unroll]
+	for(int j = 0; j < 16; j++)
+	{
+		float v = dot(float3(0.299, 0.587, 0.114), tex2D(ColorInput, uv + BUFFER_PIXEL_SIZE * offs[j]).rgb);
+		moments += float4(1, offs[j].x, offs[j].y, offs[j].x*offs[j].y) * v;
+	}
+	moments /= 16.0;
+	return moments.yz / moments.x;
 }
 
 /*=============================================================================
@@ -476,19 +489,20 @@ void WriteFeaturePS(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
 #elif OPTICAL_FLOW_MATCHING_LAYERS == 1
 	o.x = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
 	o.y = feature_data.w;
-#else 
-	float3 ycocg = linear_to_ycocg(feature_data.rgb);
-	o = float4(ycocg.x, feature_data.w, ycocg.yz*0.5+0.5);
+#else 	
+	o.x = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
+	o.y = feature_data.w;
+	o.zw = centroid_dir(i.uv);
 #endif
 }
 
-void MotionPS6(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate2, 6, 2);}
-void MotionPS5(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate6, 5, 2);}
-void MotionPS4(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate5, 4, 2);}
-void MotionPS3(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate4, 3, 2);}
-void MotionPS2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate3, 2, 2);}
-void MotionPS1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate2, 1, 1);}
-void MotionPS0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate1, 0, 1);}
+void MotionPS6(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate2, 6, 2, 4);}
+void MotionPS5(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate6, 5, 2, 4);}
+void MotionPS4(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate5, 4, 2, 4);}
+void MotionPS3(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate4, 3, 2, 4);}
+void MotionPS2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate3, 2, 2, 4);}
+void MotionPS1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate2, 1, 1, 3);}
+void MotionPS0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate1, 0, 1, 2);}
 
 void NormalsPS(in VSOUT i, out float2 o : SV_Target0)
 {
@@ -539,6 +553,32 @@ void DebugPS(in VSOUT i, out float3 o : SV_Target0)
 	}
 }
 #endif 
+
+//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
+//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
+//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
+//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
+//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
+
+/*
+	RG: feature map of current level -> keypoints for curr level with level map
+*/
+
+//DX9 safe bitfield emulation 
+//works up to 24 bits, as long as none of the higher bits so to speak are set, i.e.
+//the original value is larger than 2^24-1
+bool bitfield_get(float bitfield, int bit)
+{
+	float state = floor(bitfield / exp2(bit)); //"right shift"
+	return frac(state * 0.5) > 0.25; //"& 1"
+}
+
+void bitfield_set(inout float bitfield, int bit, bool value)
+{
+	bool is_set = bitfield_get(bitfield, bit);
+	//bitfield += exp2(bit) * (is_set != value) * (value ? 1 : -1);
+	bitfield += exp2(bit) * (value - is_set);	
+}
 
 /*=============================================================================
 	Techniques
