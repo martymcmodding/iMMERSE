@@ -190,4 +190,19 @@ float4x4 invert(float4x4 m)
 
 #define chebyshev_weight(_mean, _variance, _sample) saturate((_variance) * rcp((_variance) + ((_sample) - (_mean)) * ((_sample) - (_mean))))
 
+//DX9 safe float emulated bitfields... needed this for something that didn't work out
+//so I dumped it here in case I need it again. Works up to 24 (25?) digits and must be init with 0!
+bool bitfield_get(float bitfield, int bit)
+{
+	float state = floor(bitfield / exp2(bit)); //"right shift"
+	return frac(state * 0.5) > 0.25; //"& 1"
+}
+
+void bitfield_set(inout float bitfield, int bit, bool value)
+{
+	bool is_set = bitfield_get(bitfield, bit);
+	//bitfield += exp2(bit) * (is_set != value) * (value ? 1 : -1);
+	bitfield += exp2(bit) * (value - is_set);	
+}
+
 }

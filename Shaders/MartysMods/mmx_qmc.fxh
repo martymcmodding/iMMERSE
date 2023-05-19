@@ -18,18 +18,13 @@
 #pragma once 
 
 //All things quasirandom
+#include "mmx_global.fxh"
 
 namespace QMC
 {
 
-/* TODO verify if the below functions also work on DX9 reliably!
-//PG22 improved golden ratio sequences (https://www.shadertoy.com/view/mts3zN)
-float roberts1(float n, float x) {return frac(x + n * 0.38196601125);}
-float2 roberts2(float n, float2 x) {return frac(x + n * float2(0.245122333753, 0.430159709002));}
-float3 roberts3(float n, float3 x){return frac(x + n * float3(0.180827486604, 0.328956393296, 0.450299522098));}
-*/
-
-// improved golden ratio sequences (P. Gilcher, 2023)
+#if _BITWISE_SUPPORTED
+// improved golden ratio sequences v2 (P. Gilcher, 2023)
 // https://www.shadertoy.com/view/csdGWX
 float roberts1(in uint idx, in float seed)
 {
@@ -51,6 +46,16 @@ float3 roberts3(in uint idx, in float3 seed)
     uint3 phi = uint3(776648141u, 1412856951u, 2360945575u);
     return float3(phi * idx + useed) * exp2(-32.0);  
 }
+#else //DX9 is a jackass, nothing new...
+//improved golden ratio sequences v1 (P. Gilcher, 2022)
+//PG22 improved golden ratio sequences (https://www.shadertoy.com/view/mts3zN)
+//these just use complementary coefficients and produce identical (albeit flipped)
+//patterns, and run into numerical problems 2x-3x later than the canonical coefficients
+float roberts1(float idx, float seed)   {return frac(seed + idx * 0.38196601125);}
+float2 roberts2(float idx, float2 seed) {return frac(seed + idx * float2(0.245122333753, 0.430159709002));}
+float3 roberts3(float idx, float3 seed) {return frac(seed + idx * float3(0.180827486604, 0.328956393296, 0.450299522098));}
+
+#endif
 
 float  roberts1(in uint idx) {return roberts1(idx, 0.5);}
 float2 roberts2(in uint idx) {return roberts2(idx, 0.5.xx);}
