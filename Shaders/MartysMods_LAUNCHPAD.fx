@@ -48,7 +48,7 @@
 #endif
 
 #ifndef LAUNCHPAD_DEBUG_OUTPUT
- #define LAUNCHPAD_DEBUG_OUTPUT 	  	0		//[0 or1] 1: enables debug output of the motion vectors
+ #define LAUNCHPAD_DEBUG_OUTPUT 	  	0		//[0 or 1] 1: enables debug output of the motion vectors
 #endif
 
 /*=============================================================================
@@ -62,6 +62,18 @@ uniform float FILTER_RADIUS <
 	ui_max = 6.0;	
 > = 4.0;
 
+uniform bool ENABLE_SMOOTH_NORMALS <	
+	ui_label = "Enable Smooth Normals";
+	ui_tooltip = "Filters the normal buffer to reduce low-poly look in MXAO and RTGI."
+	"\n\n"
+	"Lighting algorithms depend on normal vectors, which describe the orientation\n"
+	"of the geometry in the scene. As ReShade does not access the game's own normals,\n"
+	"they are generated from the depth buffer instead. However, this process is lossy\n"
+	"and does not contain normal maps and smoothing groups.\n"
+	"As a result, they represent the true (blocky) object shapes and lighting calculated\n"
+	"using them can make the low-poly appearance of geometry apparent.\n";
+> = false;
+
 #if LAUNCHPAD_DEBUG_OUTPUT != 0
 uniform int DEBUG_MODE < 
     ui_type = "combo";
@@ -69,6 +81,7 @@ uniform int DEBUG_MODE <
 	ui_label = "Debug Output";
 > = 0;
 #endif
+
 
 uniform int UIHELP <
 	ui_type = "radio";
@@ -141,22 +154,13 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #define FILTER_WIDE	 	true 
 #define FILTER_NARROW 	false
 
-#define BLOCK_SIZE 					2
 #define SEARCH_OCTAVES              2
 #define OCTAVE_SAMPLES             	4
 
-uniform float TIMER < source = "timer"; >;
 uniform uint FRAME_COUNT < source = "framecount"; >;
 
 #define MAX_MIP  	6 //do not change, tied to textures
 #define MIN_MIP 	OPTICAL_FLOW_RESOLUTION
-
-//texture texMotionVectors          { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F; };
-//sampler sMotionVectorTex         { Texture = texMotionVectors;  };
-
-uniform bool R_down < source = "key"; keycode = 0x52; mode = ""; >;
-uniform bool T_down < source = "key"; keycode = 0x54; mode = ""; >;
-
 
 texture MotionTexIntermediate6               { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RGBA16F;  };
 sampler sMotionTexIntermediate6              { Texture = MotionTexIntermediate6; };
@@ -189,7 +193,7 @@ sampler sMotionTexIntermediate1              { Texture = MotionTexIntermediate1;
 #endif
 
 texture FeatureLayerPyramid          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
-sampler sFeatureLayerPyramid         { Texture = FeatureLayerPyramid; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; //giving each pyramid a different address mode helps with out of frame disocclusions - data rarely matches so the matching is often going to produce bad scores
+sampler sFeatureLayerPyramid         { Texture = FeatureLayerPyramid; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; 
 texture FeatureLayerPyramidPrev          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
 sampler sFeatureLayerPyramidPrev         { Texture = FeatureLayerPyramidPrev;MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; };
 
@@ -506,9 +510,10 @@ void MotionPS0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotion
 
 void NormalsPS(in VSOUT i, out float2 o : SV_Target0)
 {
+	/*
 	float3 delta = float3(BUFFER_PIXEL_SIZE, 0);
     //similar system to Intel ASSAO/AMD CACAO/XeGTAO and friends with improved weighting and less ALU
-    float3 center = Camera::uv_to_proj(i.uv);
+    float3 center = Camera::uv_to_proj(i.uv);	
     float3 deltaL = Camera::uv_to_proj(i.uv - delta.xz) - center;
     float3 deltaR = Camera::uv_to_proj(i.uv + delta.xz) - center;   
     float3 deltaT = Camera::uv_to_proj(i.uv - delta.zy) - center;
@@ -526,7 +531,244 @@ void NormalsPS(in VSOUT i, out float2 o : SV_Target0)
     float4 finalweight = w * rsqrt(float4(dot(n0, n0), dot(n1, n1), dot(n2, n2), dot(n3, n3)));
     float3 normal = n0 * finalweight.x + n1 * finalweight.y + n2 * finalweight.z + n3 * finalweight.w;
     normal *= rsqrt(dot(normal, normal) + 1e-8);
-	o = Math::octahedral_enc(-normal); //fixes bugs in RTGI, normal.z positive gives smaller error :)
+	o = Math::octahedral_enc(-normal);//fixes bugs in RTGI, normal.z positive gives smaller error :)
+*/
+
+	//TODO optimize with tex2Dgather? Compute? What about scaled depth buffers? oh man
+
+	const float2 dirs[9] = 
+	{
+		BUFFER_PIXEL_SIZE * float2(-1,-1),//TL
+		BUFFER_PIXEL_SIZE * float2(0,-1),//T
+		BUFFER_PIXEL_SIZE * float2(1,-1),//TR
+		BUFFER_PIXEL_SIZE * float2(1,0),//R
+		BUFFER_PIXEL_SIZE * float2(1,1),//BR
+		BUFFER_PIXEL_SIZE * float2(0,1),//B
+		BUFFER_PIXEL_SIZE * float2(-1,1),//BL
+		BUFFER_PIXEL_SIZE * float2(-1,0),//L
+		BUFFER_PIXEL_SIZE * float2(-1,-1)//TL first duplicated at end cuz it might be best pair	
+	};
+
+	float z_center = Depth::get_linear_depth(i.uv);
+	float3 center_pos = Camera::uv_to_proj(i.uv, Camera::depth_to_z(z_center));
+
+	//z close/far
+	float2 z_prev;
+	z_prev.x = Depth::get_linear_depth(i.uv + dirs[0]);
+	z_prev.y = Depth::get_linear_depth(i.uv + dirs[0] * 2);
+
+	float4 best_normal = float4(0,0,0,100000);
+	float4 weighted_normal = 0;
+
+	[loop]
+	for(int j = 1; j < 9; j++)
+	{
+		float2 z_curr;
+		z_curr.x = Depth::get_linear_depth(i.uv + dirs[j]);
+		z_curr.y = Depth::get_linear_depth(i.uv + dirs[j] * 2);
+
+		float2 z_guessed = 2 * float2(z_prev.x, z_curr.x) - float2(z_prev.y, z_curr.y);
+		float score = dot(1, abs(z_guessed - z_center));
+	
+		float3 dd_0 = Camera::uv_to_proj(i.uv + dirs[j],     Camera::depth_to_z(z_curr.x)) - center_pos;
+		float3 dd_1 = Camera::uv_to_proj(i.uv + dirs[j - 1], Camera::depth_to_z(z_prev.x)) - center_pos;
+		float3 temp_normal = cross(dd_0, dd_1);
+		float w = rcp(dot(temp_normal, temp_normal));
+		w *= rcp(score * score + exp2(-32.0));
+		weighted_normal += float4(temp_normal, 1) * w;	
+
+		best_normal = score < best_normal.w ? float4(temp_normal, score) : best_normal;
+		z_prev = z_curr;
+	}
+
+	float3 normal = weighted_normal.w < 1.0 ? best_normal.xyz : weighted_normal.xyz;
+	//normal = best_normal.xyz;
+	normal *= rsqrt(dot(normal, normal) + 1e-8);	
+	o = Math::octahedral_enc(-normal);//fixes bugs in RTGI, normal.z positive gives smaller error :)
+}
+
+//gbuffer halfres for fast filtering
+texture SmoothNormalsTempTex0  { Width = BUFFER_WIDTH/2;   Height = BUFFER_HEIGHT/2;   Format = RGBA16F;  };
+sampler sSmoothNormalsTempTex0 { Texture = SmoothNormalsTempTex0; };
+//gbuffer halfres for fast filtering
+texture SmoothNormalsTempTex1  { Width = BUFFER_WIDTH/2;   Height = BUFFER_HEIGHT/2;   Format = RGBA16F;  };
+sampler sSmoothNormalsTempTex1 { Texture = SmoothNormalsTempTex1; };
+//high res copy back so we can fetch center tap at full res always
+texture SmoothNormalsTempTex2  < pooled = true; > { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG8;  };
+sampler sSmoothNormalsTempTex2 { Texture = SmoothNormalsTempTex2; };
+
+void CopyNormalsPS(in VSOUT i, out float2 o : SV_Target0)
+{
+	o = tex2D(sSmoothNormalsTempTex2, i.uv).xy;
+}
+
+void SmoothNormalsMakeGbufPS(in VSOUT i, out float4 o : SV_Target0)
+{
+	o.xyz = Deferred::get_normals(i.uv);
+	o.w = Camera::depth_to_z(Depth::get_linear_depth(i.uv));
+}
+
+void get_gbuffer(in sampler s, in float2 uv, out float3 p, out float3 n)
+{
+	float4 t = tex2Dlod(s, uv, 0);
+	n = t.xyz;
+	p = Camera::uv_to_proj(uv, t.w);
+}
+
+void get_gbuffer_hi(in float2 uv, out float3 p, out float3 n)
+{
+	n = Deferred::get_normals(uv);
+	p = Camera::uv_to_proj(uv);
+}
+
+float sample_distribution(float x, int iteration)
+{
+	if(!iteration) return x * sqrt(x);
+	return x;
+	//return x * x;
+	//return exp2(2 * x - 2);
+}
+
+float sample_pdf(float x, int iteration)
+{
+	if(!iteration) return 1.5 * sqrt(x);
+	return 1;
+	//return 2 * x;
+	//return 2 * log(2.0) * exp2(2 * x - 2);
+}
+
+float2x3 to_tangent(float3 n)
+{
+    bool bestside = n.z < n.y;
+    float3 n2 = bestside ? n.xzy : n;
+    float3 k = (-n2.xxy * n2.xyy) * rcp(1.0 + n2.z) + float3(1, 0, 1);
+    float3 u = float3(k.xy, -n2.x);
+    float3 v = float3(k.yz, -n2.y);
+    u = bestside ? u.xzy : u;
+    v = bestside ? v.xzy : v;
+    return float2x3(u, v);
+}
+
+float4 smooth_normals_mkii(in VSOUT i, int iteration, sampler sGbuffer)
+{
+	int num_dirs = iteration ? 6 : 4;
+	int num_steps = iteration ? 3 : 6;	
+	float radius_mult = iteration ? 0.2 : 1.0;	
+
+	float2 angle_tolerance = float2(45.0, 30.0); //min/max
+
+	radius_mult *= 0.2 * 0.2;
+
+	float4 rotator = Math::get_rotator(TAU / num_dirs);
+	float2 kernel_dir; sincos(TAU / num_dirs + TAU / 12.0, kernel_dir.x, kernel_dir.y); 
+	
+	float3 p, n;
+	get_gbuffer_hi(i.uv, p, n);
+	float2x3 kernel_matrix = to_tangent(n);
+
+	float4 bin_front = float4(n, 1) * 0.15;
+	float4 bin_back = float4(n, 1) * 0.15;
+
+	float2 sigma_n = cos(radians(angle_tolerance));
+
+	[loop]
+	for(int dir = 0; dir < num_dirs; dir++)
+	{
+		[loop]
+		for(int stp = 0; stp < num_steps; stp++)
+		{
+			float fi = float(stp + 1.0) / num_steps;
+
+			float r = sample_distribution(fi, iteration);
+			float ipdf = sample_pdf(fi, iteration);
+
+			float2 sample_dir = normalize(Camera::proj_to_uv(p + 0.1 * mul(kernel_dir, kernel_matrix)) - i.uv);
+			//sample_dir = 0.8 * BUFFER_ASPECT_RATIO * kernel_dir;//
+
+			float2 sample_uv = i.uv + sample_dir * r * radius_mult;
+			if(!Math::inside_screen(sample_uv)) break;
+
+			float3 sp, sn;
+			get_gbuffer(sGbuffer, sample_uv, sp, sn);
+
+			float ndotn = dot(sn, n);
+			float plane_distance = abs(dot(sp - p, n)) + abs(dot(p - sp, sn));
+
+			float wn = smoothstep(sigma_n.x, sigma_n.y, ndotn);
+			float wz = exp2(-plane_distance*plane_distance * 10.0);
+			float wd = exp2(-dot(p - sp, p - sp));
+
+			float w = wn * wz * wd;
+
+			//focal point detection, find closest point to both 3D lines
+			/*
+			//find connecting axis
+			float3 A = cross(n, sn);
+
+			//find segment lengths for both line equations p + lambda * n
+			float d2 = dot(p - sp, cross(n, A)) / dot(sn, cross(n, A));
+			float d1 = dot(sp - p, cross(sn, A)) / dot(n, cross(sn, A));
+			*/
+
+			//heavily simplified math of the above using Lagrange identity and dot(n,n)==dot(sn,sn)==1
+			float d2 = (ndotn * dot(p - sp,  n) - dot(p - sp, sn)) / (ndotn*ndotn - 1);
+			float d1 = (ndotn * dot(p - sp, sn) - dot(p - sp,  n)) / (1 - ndotn*ndotn);
+
+			//calculate points where each line is closest to the other line
+			float3 hit1 = p + n * d1;
+			float3 hit2 = sp + sn * d2;
+
+			//mutual focal point is the mid point between those 2
+			float3 middle = (hit1 + hit2) * 0.5;
+			float side = dot(middle - p, n);
+
+			//a hard sign split causes flickering, so do a smooth classifier as front or back
+			float front_weight = saturate(side * 3.0 + 0.5);
+			float back_weight = 1 - front_weight;
+
+			if(ndotn > 0.9999) //fix edge case with parallel lines
+			{
+				front_weight = 1;
+				back_weight = 1;
+			}
+
+			bin_front += float4(sn, 1) * ipdf * w * front_weight;
+			bin_back += float4(sn, 1) * ipdf * w * back_weight;
+
+			if(w < 0.01) break;
+		}
+
+		kernel_dir = Math::rotate_2D(kernel_dir, rotator);
+	}
+
+	bin_back.xyz = normalize(bin_back.xyz);
+	bin_front.xyz = normalize(bin_front.xyz);
+
+	//smooth binary select
+	float bal = bin_back.w / (bin_front.w + bin_back.w);
+	bal = smoothstep(0, 1, bal);
+	bal = smoothstep(0, 1, bal);
+
+	float3 best_bin = lerp(bin_front.xyz, bin_back.xyz, bal);
+	return float4(safenormalize(best_bin), p.z);
+}
+
+VSOUT SmoothNormalsVS(in uint id : SV_VertexID)
+{
+    VSOUT o;
+    FullscreenTriangleVS(id, o.vpos, o.uv); 
+	if(!ENABLE_SMOOTH_NORMALS) o.vpos = -100000; //forcing NaN here kills this in geometry stage, faster than discard()
+    return o;
+}
+
+void SmoothNormalsPass0PS(in VSOUT i, out float4 o : SV_Target0)
+{
+	o = smooth_normals_mkii(i, 0, sSmoothNormalsTempTex0);	
+}
+
+void SmoothNormalsPass1PS(in VSOUT i, out float2 o : SV_Target0)
+{	
+	o = Math::octahedral_enc(-smooth_normals_mkii(i, 1, sSmoothNormalsTempTex1).xyz);
 }
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0
@@ -552,33 +794,7 @@ void DebugPS(in VSOUT i, out float3 o : SV_Target0)
 		case 3: o = gradient(Depth::get_linear_depth(i.uv)); break;
 	}
 }
-#endif 
-
-//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
-//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
-//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
-//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
-//++++++++++++++++++++++++++++++++++++++++//++++++++++++++++++++++++++++++++++++++++
-
-/*
-	RG: feature map of current level -> keypoints for curr level with level map
-*/
-
-//DX9 safe bitfield emulation 
-//works up to 24 bits, as long as none of the higher bits so to speak are set, i.e.
-//the original value is larger than 2^24-1
-bool bitfield_get(float bitfield, int bit)
-{
-	float state = floor(bitfield / exp2(bit)); //"right shift"
-	return frac(state * 0.5) > 0.25; //"& 1"
-}
-
-void bitfield_set(inout float bitfield, int bit, bool value)
-{
-	bool is_set = bitfield_get(bitfield, bit);
-	//bitfield += exp2(bit) * (is_set != value) * (value ? 1 : -1);
-	bitfield += exp2(bit) * (value - is_set);	
-}
+#endif
 
 /*=============================================================================
 	Techniques
@@ -611,7 +827,11 @@ technique MartysMods_Launchpad
     pass {VertexShader = MainVS;PixelShader = MotionPS1;RenderTarget = MotionTexIntermediate1;}
     pass {VertexShader = MainVS;PixelShader = MotionPS0;RenderTarget = MotionTexIntermediate0;}
 	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget = FeatureLayerPyramidPrev; }
-	pass {VertexShader = MainVS;PixelShader = NormalsPS; RenderTarget = Deferred::NormalsTex; }
+	pass {VertexShader = MainVS;PixelShader = NormalsPS; RenderTarget = Deferred::NormalsTex; }		
+	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsMakeGbufPS;  RenderTarget = SmoothNormalsTempTex0;}
+	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsPass0PS;  RenderTarget = SmoothNormalsTempTex1;}
+	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsPass1PS;  RenderTarget = SmoothNormalsTempTex2;}
+	pass {VertexShader = SmoothNormalsVS;PixelShader = CopyNormalsPS; RenderTarget = Deferred::NormalsTex; }
 #if LAUNCHPAD_DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
 	pass {VertexShader = MainVS;PixelShader  = DebugPS;  }		
 #endif 
