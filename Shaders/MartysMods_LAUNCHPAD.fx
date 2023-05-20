@@ -150,6 +150,13 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_camera.fxh"
 #include ".\MartysMods\mmx_deferred.fxh"
 
+#if __RENDERER__ < RENDERER_D3D10
+ #if OPTICAL_FLOW_MATCHING_LAYERS == 2
+ #undef OPTICAL_FLOW_MATCHING_LAYERS 
+ #define OPTICAL_FLOW_MATCHING_LAYERS 1
+ #endif	
+#endif
+
 #define INTERP 			LINEAR
 #define FILTER_WIDE	 	true 
 #define FILTER_NARROW 	false
@@ -289,7 +296,7 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 
 			m2_search = 0;
 			m_cov = 0;
-			
+
 			[loop]
 			for(int k = 0; k < blocksize * blocksize; k++)
 			{
