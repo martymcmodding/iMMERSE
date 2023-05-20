@@ -260,7 +260,7 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 		m_cov += t_local * t_search;
 	}	
 
-	float variance = dot(1, abs(m2_local.x / (blocksize * blocksize) - m1_local.x * m1_local.x / ((blocksize * blocksize)*(blocksize * blocksize))));
+	float variance = abs(m2_local.x / (blocksize * blocksize) - m1_local.x * m1_local.x / ((blocksize * blocksize)*(blocksize * blocksize)));
 	float best_sim = minc(m_cov * rsqrt(m2_local * m2_search));
 
 	//this fixes completely white areas from polluting the buffer with false offsets
@@ -289,14 +289,14 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 
 			m2_search = 0;
 			m_cov = 0;
-
+			
 			[loop]
-			for(uint k = 0; k < blocksize * blocksize; k++)
+			for(int k = 0; k < blocksize * blocksize; k++)
 			{
 				FEATURE_TYPE t = get_prev_feature(search_center + float2(k % blocksize, k / blocksize) * texelsize * search_scale, level).FEATURE_COMPS;
 				m2_search += t * t;
 				m_cov += local_block[k] * t;
-			}
+			}	
 
 			float sim = minc(m_cov * rsqrt(m2_local * m2_search));			
 			if(sim < best_sim) continue;
