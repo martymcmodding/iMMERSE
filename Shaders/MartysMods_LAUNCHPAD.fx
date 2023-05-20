@@ -298,7 +298,7 @@ float4 find_best_residual_motion(VSOUT i, int level, float4 coarse_layer, const 
 			m_cov = 0;
 
 			[loop]
-			for(int k = 0; k < blocksize * blocksize; k++)
+			for(uint k = 0; k < blocksize * blocksize; k++)
 			{
 				FEATURE_TYPE t = get_prev_feature(search_center + float2(k % blocksize, k / blocksize) * texelsize * search_scale, level).FEATURE_COMPS;
 				m2_search += t * t;
