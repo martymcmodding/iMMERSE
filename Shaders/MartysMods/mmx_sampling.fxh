@@ -78,6 +78,9 @@ float4 tex3D(sampler s, float3 uvw, int3 size)
     return sample_volume_trilinear(s, uvw, size, 0);
 }
 
+//Optimized Bspline bicubic filtering
+//FXC assembly: 37->25 ALU, 5->3 registers
+//One texture coord known early, better for latency
 float4 sample_bicubic(sampler s, float2 iuv, int2 size)
 {
     float4 uv;
@@ -87,14 +90,13 @@ float4 sample_bicubic(sampler s, float2 iuv, int2 size)
 	float4 d = float4(uv.xy - center, 1 + center - uv.xy);
 	float4 d2 = d * d;
 	float4 d3 = d2 * d;
-	float4 sd = d2 * (3 - 2 * d);
 
-    float4 o = lerp(d2, d3, 0.3594) * 0.2; //approx |err|*255 < 0.2 < bilinear precision
+    float4 o = d2 * 0.12812 + d3 * 0.07188; //approx |err|*255 < 0.2 < bilinear precision
 	uv.xy = center - o.zw;
 	uv.zw = center + 1 + o.xy;
 	uv /= size.xyxy;
 
-    float4 w = (1.0/6.0) + d * 0.5 + sd * (1.0/6.0);
+    float4 w = 0.16666666 + d * 0.5 + 0.5 * d2 - d3 * 0.3333333;
 	w = w.wwyy * w.zxzx;
 
     return w.x * tex2Dlod(s, uv.xy, 0)
@@ -124,11 +126,12 @@ float4 tex2Dbiquadratic(sampler s, float2 iuv)
     return sample_biquadratic(s, iuv, tex2Dsize(s));
 }
 
+/* //commented for now, causes potentially uninitialized variable error... for no reason...
 float4 sample_tricubic(sampler s, float3 uvw, int3 size, int atlas_idx)
 {
     //end condition, no way to handle this easily without potentially introducing wrong values    
     if(any(abs(uvw - 0.5) > 0.5 - rcp(size) * 0.5))
-        return tex3D(s, uvw, size, atlas_idx);
+        return sample_volume_trilinear(s, uvw, size, atlas_idx);
 
     uvw = saturate(uvw) * size;
     float3 tc = floor(uvw - 0.5) + 0.5;
@@ -148,22 +151,22 @@ float4 sample_tricubic(sampler s, float3 uvw, int3 size, int atlas_idx)
 
     t0 /= size; t1 /= size;
 
-    float4 X00 = lerp(tex3D(s, float3(t1.x, t0.y, t0.z), size, atlas_idx),
-                      tex3D(s, float3(t0.x, t0.y, t0.z), size, atlas_idx), s0.x);
+    float4 X00 = lerp(sample_volume_trilinear(s, float3(t1.x, t0.y, t0.z), size, atlas_idx),
+                      sample_volume_trilinear(s, float3(t0.x, t0.y, t0.z), size, atlas_idx), s0.x);
 
-    float4 X10 = lerp(tex3D(s, float3(t1.x, t1.y, t0.z), size, atlas_idx),
-                      tex3D(s, float3(t0.x, t1.y, t0.z), size, atlas_idx), s0.x);
+    float4 X10 = lerp(sample_volume_trilinear(s, float3(t1.x, t1.y, t0.z), size, atlas_idx),
+                      sample_volume_trilinear(s, float3(t0.x, t1.y, t0.z), size, atlas_idx), s0.x);
 
     float4 XX0 = lerp(X10, X00,  s0.y);
 
-    float4 X01 = lerp(tex3D(s, float3(t1.x, t0.y, t1.z), size, atlas_idx),
-                      tex3D(s, float3(t0.x, t0.y, t1.z), size, atlas_idx), s0.x);
+    float4 X01 = lerp(sample_volume_trilinear(s, float3(t1.x, t0.y, t1.z), size, atlas_idx),
+                      sample_volume_trilinear(s, float3(t0.x, t0.y, t1.z), size, atlas_idx), s0.x);
 
-    float4 X11 = lerp(tex3D(s, float3(t1.x, t1.y, t1.z), size, atlas_idx),
-                      tex3D(s, float3(t0.x, t1.y, t1.z), size, atlas_idx), s0.x);
+    float4 X11 = lerp(sample_volume_trilinear(s, float3(t1.x, t1.y, t1.z), size, atlas_idx),
+                      sample_volume_trilinear(s, float3(t0.x, t1.y, t1.z), size, atlas_idx), s0.x);
 
     float4 XX1 = lerp(X11, X01,  s0.y);
     return lerp(XX1, XX0,  s0.z);
 }
-
+*/
 }
