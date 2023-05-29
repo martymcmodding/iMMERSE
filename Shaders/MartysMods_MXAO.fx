@@ -517,7 +517,6 @@ void OcclusionWrap1PS(in VSOUT i, out float2 o : SV_Target0) //writes to AOTex2
     float4 uv;
     uv.xy = pixel_idx_to_uv(dispatchthreadid, BUFFER_SCREEN_SIZE);
     uv.zw = pixel_idx_to_uv(write_pos, BUFFER_SCREEN_SIZE);
-
     o = MXAO(uv, tile_idx, write_pos);
 }
 
@@ -530,7 +529,7 @@ void OcclusionWrap2PS(in VSOUT i, out float2 o : SV_Target0)
     //need to do it here again because the AO pass writes to AOTex2, which is also intermediate for filter
     //so we only take the new texels and transfer them to AOTex1, so AOTex1 contains unfiltered, reconstructed data
     if(shading_rate(tile_idx)) discard;
-    o = tex2Dfetch(sAOTex2, read_pos).xy;
+    o = tex2Dfetch(sAOTex2, read_pos).xy;    
 }
 #endif
 /*
