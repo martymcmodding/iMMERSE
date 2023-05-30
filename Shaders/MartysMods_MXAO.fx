@@ -44,6 +44,10 @@
  #define MXAO_AO_TYPE       0
 #endif 
 
+#ifndef MXAO_USE_LAUNCHPAD_NORMALS
+ #define MXAO_USE_LAUNCHPAD_NORMALS       0
+#endif
+
 /*=============================================================================
 	UI Uniforms
 =============================================================================*/
@@ -118,7 +122,12 @@ ui_type = "radio";
             ":\n\n0: Ground Truth Ambient Occlusion (high contrast, fast)\n"
                  "1: Solid Angle (smoother, fastest)\n"
                  "2: Visibility Bitmask (DX11+ only, highest quality, slower)\n"
-                 "3: Visibility Bitmask w/ Solid Angle (like 2, only smoother)";
+                 "3: Visibility Bitmask w/ Solid Angle (like 2, only smoother)\n"
+            "\n"
+            TOKENIZE(MXAO_USE_LAUNCHPAD_NORMALS)
+            ":\n\n0: Compute normal vectors on the fly (fast)\n"
+                 "1: Use normals from iMMERSE Launchpad (far slower)\n"
+                 "   This allows to use Launchpad's smooth normals feature.";
 >;
 
 /*
@@ -162,6 +171,11 @@ sampler sZSrc { Texture = ZSrc; MinFilter=POINT; MipFilter=POINT; MagFilter=POIN
 texture AOTex1 { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
 texture AOTex2 { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
 
+#if !_COMPUTE_SUPPORTED
+texture AOTexRaw { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
+sampler sAOTexRaw { Texture = AOTexRaw;  MinFilter=POINT; MipFilter=POINT; MagFilter=POINT; };
+#endif
+
 sampler sAOTex1 { Texture = AOTex1; };
 sampler sAOTex2 { Texture = AOTex2; };
 
@@ -169,6 +183,12 @@ sampler sAOTex2 { Texture = AOTex2; };
 #include ".\MartysMods\mmx_depth.fxh"
 #include ".\MartysMods\mmx_math.fxh"
 #include ".\MartysMods\mmx_camera.fxh"
+
+#if MXAO_USE_LAUNCHPAD_NORMALS 
+ #include ".\MartysMods\mmx_deferred.fxh"
+#endif 
+
+//#undef _COMPUTE_SUPPORTED
 
 #if _COMPUTE_SUPPORTED == 0
  #if MXAO_AO_TYPE >= 2
@@ -214,7 +234,7 @@ struct CSIN
 	Functions
 =============================================================================*/
 
-float2 pixel_idx_to_uv(uint2 pos, float2 texture_size)
+float2 pixel_idx_to_uv(float2 pos, float2 texture_size)
 {
     float2 inv_texture_size = rcp(texture_size);
     return pos * inv_texture_size + 0.5 * inv_texture_size;
@@ -241,6 +261,21 @@ uint2 reinterleave_pos(uint2 pos, uint2 tiles, uint2 gridsize)
     return pos_in_tile * tiles + tile_idx;
 }
 
+float2 deinterleave_uv(float2 uv)
+{
+    float2 splituv = uv * DEINTERLEAVE_TILE_COUNT;
+    float2 splitoffset = floor(splituv) - DEINTERLEAVE_TILE_COUNT * 0.5 + 0.5;
+    splituv = frac(splituv) + splitoffset * BUFFER_PIXEL_SIZE;
+    return splituv;
+}
+float2 reinterleave_uv(float2 uv)
+{
+    uint2 whichtile = floor(uv / BUFFER_PIXEL_SIZE) % DEINTERLEAVE_TILE_COUNT;
+    float2 newuv = uv + whichtile;
+    newuv /= DEINTERLEAVE_TILE_COUNT;
+    return newuv;
+}
+
 float3 get_normals(in float2 uv, out float edge_weight)
 {
     float3 delta = float3(BUFFER_PIXEL_SIZE, 0);
@@ -257,6 +292,10 @@ float3 get_normals(in float2 uv, out float edge_weight)
 
     edge_weight = saturate(1.0 - dot(w, 1));
 
+#if MXAO_USE_LAUNCHPAD_NORMALS //this is a bit hacky, we need the edge weight for filtering but Launchpad doesn't give them to us, so we compute the data till here and read launchpad normals
+    float3 normal = Deferred::get_normals(uv);
+#else 
+
     float3 n0 = cross(deltaT, deltaL);
     float3 n1 = cross(deltaR, deltaT);
     float3 n2 = cross(deltaB, deltaR);
@@ -265,8 +304,8 @@ float3 get_normals(in float2 uv, out float edge_weight)
     float4 finalweight = w * rsqrt(float4(dot(n0, n0), dot(n1, n1), dot(n2, n2), dot(n3, n3)));
     float3 normal = n0 * finalweight.x + n1 * finalweight.y + n2 * finalweight.z + n3 * finalweight.w;
     normal *= rsqrt(dot(normal, normal) + 1e-8);
-
-    return normal;    
+#endif 
+    return normal;  
 }
 
 float get_jitter(uint2 p)
@@ -329,16 +368,13 @@ void DepthInterleaveCS(in CSIN i)
 #else 
 void DepthInterleavePS(in VSOUT i, out float o : SV_Target0)
 { 
-    uint2 pos = floor(i.vpos.xy);
-    uint2 get_pos = reinterleave_pos(pos, DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE); //PS -> gather
-    float2 get_uv = pixel_idx_to_uv(get_pos, BUFFER_SCREEN_SIZE);
-
+    float2 get_uv = deinterleave_uv(i.uv);
     o = Camera::depth_to_z(Depth::get_linear_depth(get_uv));
 }
 #endif
 
 float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
-{   
+{ 	
     float z = tex2Dlod(sZSrc, uv.xy, 0).x;
     float d = Camera::z_to_depth(z);
 
@@ -485,6 +521,7 @@ bool shading_rate(uint2 tile_idx)
     }
     return skip_pixel;
 }
+
 #if _COMPUTE_SUPPORTED
 void OcclusionWrapCS(in CSIN i)
 {
@@ -512,24 +549,26 @@ void OcclusionWrap1PS(in VSOUT i, out float2 o : SV_Target0) //writes to AOTex2
     uint2 write_pos = reinterleave_pos(dispatchthreadid, DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE);
     uint2 tile_idx = dispatchthreadid / CEIL_DIV(BUFFER_SCREEN_SIZE, DEINTERLEAVE_TILE_COUNT);
 
-    if(shading_rate(tile_idx)) discard;
+    if(shading_rate(tile_idx)) discard;   
+   
 
     float4 uv;
     uv.xy = pixel_idx_to_uv(dispatchthreadid, BUFFER_SCREEN_SIZE);
-    uv.zw = pixel_idx_to_uv(write_pos, BUFFER_SCREEN_SIZE);
+    //uv.zw = pixel_idx_to_uv(write_pos, BUFFER_SCREEN_SIZE);
+    uv.zw = deinterleave_uv(uv.xy); //no idea why _this_ works but the other doesn't but that's just DX9 being a jackass I guess
     o = MXAO(uv, tile_idx, write_pos);
 }
 
 void OcclusionWrap2PS(in VSOUT i, out float2 o : SV_Target0) 
 {
-    uint2 dispatchthreadid = floor(i.vpos.xy);
+	uint2 dispatchthreadid = floor(i.vpos.xy);
     uint2 read_pos = deinterleave_pos(dispatchthreadid, DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE);
     uint2 tile_idx = dispatchthreadid / CEIL_DIV(BUFFER_SCREEN_SIZE, DEINTERLEAVE_TILE_COUNT);
-
+    
     //need to do it here again because the AO pass writes to AOTex2, which is also intermediate for filter
     //so we only take the new texels and transfer them to AOTex1, so AOTex1 contains unfiltered, reconstructed data
     if(shading_rate(tile_idx)) discard;
-    o = tex2Dfetch(sAOTex2, read_pos).xy;    
+    o = tex2Dfetch(sAOTexRaw, read_pos).xy;    
 }
 #endif
 /*
@@ -665,7 +704,7 @@ technique MartysMods_MXAO
     }
 #else 
     pass { VertexShader = MainVS; PixelShader = DepthInterleavePS; RenderTarget = ZSrc; }
-    pass { VertexShader = MainVS; PixelShader = OcclusionWrap1PS;  RenderTarget = AOTex2; }
+    pass { VertexShader = MainVS; PixelShader = OcclusionWrap1PS;  RenderTarget = AOTexRaw; }
     pass { VertexShader = MainVS; PixelShader = OcclusionWrap2PS;  RenderTarget = AOTex1; }
 #endif
     pass { VertexShader = MainVS; PixelShader = Filter1PS; RenderTarget = AOTex2; }

@@ -149,6 +149,13 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_camera.fxh"
 #include ".\MartysMods\mmx_deferred.fxh"
 
+#if __RENDERER__ < RENDERER_D3D10 //too many textures because DX9 is a jackass
+ #if OPTICAL_FLOW_MATCHING_LAYERS == 2
+ #undef OPTICAL_FLOW_MATCHING_LAYERS 
+ #define OPTICAL_FLOW_MATCHING_LAYERS 1
+ #endif	
+#endif
+
 #define INTERP 			LINEAR
 #define FILTER_WIDE	 	true 
 #define FILTER_NARROW 	false
@@ -160,9 +167,6 @@ uniform uint FRAMECOUNT < source = "framecount"; >;
 
 #define MAX_MIP  	6 //do not change, tied to textures
 #define MIN_MIP 	OPTICAL_FLOW_RESOLUTION
-
-texture BlueNoiseTex       < source = "iMMERSE_bluenoise.png"; > { Width = 32; Height = 32; Format = RGBA8; };
-sampler	sBlueNoiseTex      { Texture = BlueNoiseTex; AddressU = WRAP; AddressV = WRAP; };
 
 texture MotionTexIntermediate6               { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RGBA16F;  };
 sampler sMotionTexIntermediate6              { Texture = MotionTexIntermediate6; };
@@ -195,6 +199,7 @@ sampler sFeatureLayerPyramid         { Texture = FeatureLayerPyramid; MipFilter=
 texture FeatureLayerPyramidPrev          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = FEATURE_FORMAT; MipLevels = 1 + MAX_MIP - MIN_MIP; };
 sampler sFeatureLayerPyramidPrev         { Texture = FeatureLayerPyramidPrev;MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; };
 
+#if OPTICAL_FLOW_MATCHING_LAYERS == 2
 texture CircularHarmonicsPyramidCurr0          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = RGBA16F; MipLevels = 4 - MIN_MIP; };
 sampler sCircularHarmonicsPyramidCurr0         { Texture = CircularHarmonicsPyramidCurr0; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; 
 texture CircularHarmonicsPyramidCurr1          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = RGBA16F; MipLevels = 4 - MIN_MIP; };
@@ -203,7 +208,16 @@ texture CircularHarmonicsPyramidPrev0          { Width = BUFFER_WIDTH>>MIN_MIP; 
 sampler sCircularHarmonicsPyramidPrev0         { Texture = CircularHarmonicsPyramidPrev0; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; 
 texture CircularHarmonicsPyramidPrev1          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = RGBA16F; MipLevels = 4 - MIN_MIP; };
 sampler sCircularHarmonicsPyramidPrev1         { Texture = CircularHarmonicsPyramidPrev1; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; 
-
+#else 
+ #define CircularHarmonicsPyramidCurr0 ColorInputTex
+ #define CircularHarmonicsPyramidCurr1 ColorInputTex
+ #define CircularHarmonicsPyramidPrev0 ColorInputTex
+ #define CircularHarmonicsPyramidPrev1 ColorInputTex
+ #define sCircularHarmonicsPyramidCurr0 ColorInput
+ #define sCircularHarmonicsPyramidCurr1 ColorInput
+ #define sCircularHarmonicsPyramidPrev0 ColorInput
+ #define sCircularHarmonicsPyramidPrev1 ColorInput
+#endif
 
 struct VSOUT
 {
@@ -242,6 +256,13 @@ float get_similarity(FEATURE_TYPE m_xx, FEATURE_TYPE m_yy, FEATURE_TYPE m_xy)
 #else
 	return dot(0.5, m_xy) * rsqrt(dot(0.5, m_xx) * dot(0.5, m_yy));
 #endif
+}
+
+float3 jitter(in int2 pos)
+{    
+    const float2 magicdot = float2(0.75487766624669276, 0.569840290998); 
+    const float3 magicadd = float3(0, 0.025, 0.0125) * dot(magicdot, 1);
+    return frac(dot(pos, magicdot) + magicadd);  
 }
 
 float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksize)
@@ -287,7 +308,7 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 
 	float phi = radians(360.0 / OCTAVE_SAMPLES);
 	float4 rotator = Math::get_rotator(phi);	
-	float randseed = tex2Dfetch(sBlueNoiseTex, uint2(i.vpos.xy) % 32u).x;
+	float randseed = jitter(i.vpos.xy).x;
 	randseed = QMC::roberts1(level, randseed);
 
 	float2 randdir; sincos(randseed * phi, randdir.x, randdir.y);
@@ -361,7 +382,7 @@ float4 harmonics_matching(VSOUT i, int level, float4 coarse_layer, const int blo
 
 	float phi = radians(360.0 / OCTAVE_SAMPLES);
 	float4 rotator = Math::get_rotator(phi);	
-	float randseed = tex2Dfetch(sBlueNoiseTex, uint2(i.vpos.xy) % 32u).x;
+	float randseed = jitter(i.vpos.xy).x;
 	randseed = QMC::roberts1(level, randseed);
 
 	float2 randdir; sincos(randseed * phi, randdir.x, randdir.y);
