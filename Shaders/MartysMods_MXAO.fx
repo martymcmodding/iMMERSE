@@ -190,13 +190,6 @@ sampler sAOTex2 { Texture = AOTex2; };
 
 //#undef _COMPUTE_SUPPORTED
 
-#if _COMPUTE_SUPPORTED == 0
- #if MXAO_AO_TYPE >= 2
- #undef MXAO_AO_TYPE
- #define MXAO_AO_TYPE 1
- #endif
-#endif
-
 //integer divide, rounding up
 #define CEIL_DIV(num, denom) (((num - 1) / denom) + 1)
 
@@ -373,6 +366,44 @@ void DepthInterleavePS(in VSOUT i, out float o : SV_Target0)
 }
 #endif
 
+//Needs this because DX9 is a jackass and doesn't have bitwise ops... so emulate them with floats
+bool bitfield_get(float bitfield, int bit)
+{
+    float state = floor(bitfield * exp2(-bit)); //"right shift"
+    return frac(state * 0.5) > 0.25; //"& 1"
+}
+
+void bitfield_set(inout float bitfield, int bit, bool value)
+{
+    bool is_set = bitfield_get(bitfield, bit);
+    bitfield += exp2(bit) * (value - is_set);    
+}
+
+//tried many things like LUTs, or'ing bits 4 at a time and what not, the stupid and straightforward approach is best
+float bitfield_set_bits(float bitfield, int start, int stride/*, out float num_changed*/)
+{ 
+    //num_changed = 0;
+    [loop]
+    for(int bit = start; bit < start + stride; bit++)
+    {
+        bitfield_set(bitfield, bit, 1);
+        //bool is_set = bitfield_get(bitfield, bit);
+        //num_changed += 1.0 - is_set;
+        //bitfield += exp2(bit) * (1.0 - is_set); 
+    }
+       
+    return bitfield;
+}
+
+float bitfield_countones(float bitfield)
+{  
+    float sum = 0;
+    [loop]
+    for(int bit = 0; bit < 24; bit++)
+        sum += bitfield_get(bitfield, bit);
+    return sum;
+}
+
 float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
 { 	
     float z = tex2Dlod(sZSrc, uv.xy, 0).x;
@@ -430,7 +461,11 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
         float normal_angle = Math::fast_acos(cosn) * Math::fast_sign(dot(ortho_dir, n_proj_on_slice));
         
         float2 maxhorizoncos = sin(normal_angle); maxhorizoncos.y = -maxhorizoncos.y; //cos(normal_angle -+ pi/2)  
-        uint occlusion_bitfield = 0xFFFFFFFF;        
+#if _COMPUTE_SUPPORTED
+        uint occlusion_bitfield = 0xFFFFFFFF;   
+#else       
+        float occlusion_bitfield = 0;
+#endif
 
         [unroll]
         for(int side = 0; side < 2; side++)
@@ -472,11 +507,18 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
                     //this almost perfectly approximates inverse transform sampling for cosine lobe
                     h_frontback = h_frontback * h_frontback * (3.0 - 2.0 * h_frontback); 
 #endif
+                   
+#if _COMPUTE_SUPPORTED
                     uint a = uint(h_frontback.x * 32);
                     uint b = round(saturate(h_frontback.y - h_frontback.x) * 32); //ceil? using half occlusion here
                     uint occlusion = ((1 << b) - 1) << a;
                     occlusion_bitfield &= ~occlusion; //somehow "and" is faster than "or" based occlusion
-#endif                
+#else                
+                    uint a = floor(h_frontback.x * 24);
+                    uint b = floor(saturate(h_frontback.y - h_frontback.x) * 25.0); //haven't figured out why this needs to be one more (gives artifacts otherwise) but whatever, somethingsomething float inaccuracy
+                    occlusion_bitfield = bitfield_set_bits(occlusion_bitfield, a, b);
+#endif //_COMPUTE_SUPPORTED
+#endif  //MXAO_AO_TYPE        
                 }              
             }
             scaled_dir = -scaled_dir; //unroll kills that :)                                  
@@ -491,8 +533,13 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
         visibility += dot(max_horizon_angle, sliceweight);
         slicesum += sliceweight;
 #else
+
+#if _COMPUTE_SUPPORTED
         visibility += saturate(countbits(occlusion_bitfield) / 32.0) * sliceweight;
-        slicesum += sliceweight;            
+#else 
+        visibility += saturate(1.0 - bitfield_countones(occlusion_bitfield) / 24.0) * sliceweight;
+#endif
+        slicesum += sliceweight;           
 #endif
     }
 
