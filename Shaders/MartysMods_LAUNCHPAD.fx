@@ -51,6 +51,10 @@
  #define LAUNCHPAD_DEBUG_OUTPUT 	  	0		//[0 or 1] 1: enables debug output of the motion vectors
 #endif
 
+#ifndef LAUNCHPAD_TEXTURED_NORMALS
+ #define LAUNCHPAD_TEXTURED_NORMALS 	1		//[0-2] 0=off, 1=on
+#endif
+
 /*=============================================================================
 	UI Uniforms
 =============================================================================*/
@@ -59,7 +63,8 @@ uniform float FILTER_RADIUS <
 	ui_type = "drag";
 	ui_label = "Optical Flow Filter Smoothness";
 	ui_min = 0.0;
-	ui_max = 6.0;	
+	ui_max = 6.0;
+	ui_category = "Optical Flow";		
 > = 4.0;
 
 uniform bool ENABLE_SMOOTH_NORMALS <	
@@ -72,7 +77,36 @@ uniform bool ENABLE_SMOOTH_NORMALS <
 	"and does not contain normal maps and smoothing groups.\n"
 	"As a result, they represent the true (blocky) object shapes and lighting calculated\n"
 	"using them can make the low-poly appearance of geometry apparent.\n";
+	ui_category = "Normal Vectors";	
 > = false;
+
+#if LAUNCHPAD_TEXTURED_NORMALS
+uniform float TEXTURED_NORMALS_RADIUS <
+	ui_type = "drag";
+	ui_label = "Textured Normals Sample Radius";
+	ui_min = 0.0;
+	ui_max = 1.0;
+	ui_category = "Normal Vectors";	
+> = 0.5;
+
+uniform float TEXTURED_NORMALS_INTENSITY <
+	ui_type = "drag";
+	ui_label = "Textured Normals Intensity";
+	ui_tooltip = "Higher values cause stronger surface bumpyness.";
+	ui_min = 0.0;
+	ui_max = 1.0;
+	ui_category = "Normal Vectors";	
+> = 0.5;
+
+uniform float TEXTURED_NORMALS_CURVE <
+	ui_type = "drag";
+	ui_label = "Textured Normals Curve";
+	ui_tooltip = "Higher values restrict the relief to strongly contrasted texture details.";
+	ui_min = 0.0;
+	ui_max = 1.0;
+	ui_category = "Normal Vectors";	
+> = 0.5;
+#endif
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0
 uniform int DEBUG_MODE < 
@@ -935,7 +969,104 @@ void SmoothNormalsPass0PS(in VSOUT i, out float4 o : SV_Target0)
 
 void SmoothNormalsPass1PS(in VSOUT i, out float2 o : SV_Target0)
 {	
-	o = Math::octahedral_enc(-smooth_normals_mkii(i, 1, sSmoothNormalsTempTex1).xyz);
+	//o = Math::octahedral_enc(-smooth_normals_mkii(i, 1, sSmoothNormalsTempTex1).xyz);
+	float3 n = -smooth_normals_mkii(i, 1, sSmoothNormalsTempTex1).xyz;
+
+#if LAUNCHPAD_TEXTURED_NORMALS	
+	float3 p = Camera::uv_to_proj(i.uv);
+	float luma = dot(tex2D(ColorInput, i.uv).rgb, 0.3333);
+	float2x3 kernel_matrix = to_tangent(n.zyx);
+
+	float3 v_y = normalize(p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(0, 2))) * 10.0 * saturate(TEXTURED_NORMALS_RADIUS) / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
+	float3 v_x = normalize(p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(2, 0))) * 10.0 * saturate(TEXTURED_NORMALS_RADIUS) / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
+
+	const float2 dirs[9] = 
+	{
+		float2(-1,-1),//TL
+		float2(0,-1),//T
+		float2(1,-1),//TR
+		float2(1,0),//R
+		float2(1,1),//BR
+		float2(0,1),//B
+		float2(-1,1),//BL
+		float2(-1,0),//L
+		float2(-1,-1)//TL first duplicated at end cuz it might be best pair	
+	};
+
+	float3 center_p_height = p + dot(tex2D(ColorInput, i.uv).rgb, 0.3333) * n;
+
+	float2 prev_uv = Camera::proj_to_uv(p + v_x * dirs[0].x + v_y * dirs[0].y);
+	float3 prev_p = Camera::uv_to_proj(prev_uv);
+	float3 prev_p_height = prev_p + dot(tex2D(ColorInput, prev_uv).rgb, 0.3333) * n;
+	float prev_planedist = abs(dot(n, prev_p - p)) + 1e-5;
+
+	float3 summed_normal = 0;
+
+	[loop]
+	for(int j = 1; j < 9; j++)
+	{
+		float2 curr_uv = Camera::proj_to_uv(p + v_x * dirs[j].x + v_y * dirs[j].y);
+		float3 curr_p = Camera::uv_to_proj(curr_uv);
+		float3 curr_p_height = curr_p + dot(tex2D(ColorInput, curr_uv).rgb, 0.3333) * n;
+		float curr_planedist = abs(dot(n, curr_p - p)) + 1e-5;
+
+		float w = rcp(0.05 + prev_planedist + curr_planedist);
+		float3 curr_n = cross(prev_p_height - center_p_height, curr_p_height - center_p_height);
+		 w *= rsqrt(1e-5 + dot(curr_n, curr_n));
+		summed_normal += curr_n * w;
+
+		prev_planedist = curr_planedist;
+		prev_p_height = curr_p_height;
+	}
+
+	float normal_len = length(summed_normal);
+	summed_normal = normalize(summed_normal + n * saturate(1 - normal_len * normal_len * 1000.0)); //!
+	float3 halfvector = n - (summed_normal) * 1.5 * saturate(TEXTURED_NORMALS_INTENSITY);
+
+	//float3 tangent = halfvector - dot(halfvector, n) / dot(halfvector, halfvector) * n;
+
+	float ilen = sqrt(dot(halfvector, halfvector)) + 1e-7;
+	n += (halfvector) / (ilen) * lerp(ilen, ilen * ilen * ilen * ilen, saturate(TEXTURED_NORMALS_CURVE));
+
+	n = normalize(n);
+#endif
+
+	/*
+
+	float3 deltav_t = normalize(p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(0, 1))) * tempF1.x;
+	float3 deltav_b = normalize(p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(1, 0))) * tempF1.x;
+
+	float2 uv_t_A = Camera::proj_to_uv(p + deltav_t);
+	float2 uv_t_B = Camera::proj_to_uv(p - deltav_t);
+	float2 uv_b_A = Camera::proj_to_uv(p + deltav_b);
+	float2 uv_b_B = Camera::proj_to_uv(p - deltav_b);
+
+	float3 deltapos_t_A = Camera::uv_to_proj(uv_t_A);
+	float3 deltapos_t_B = Camera::uv_to_proj(uv_t_B);
+	float3 deltapos_b_A = Camera::uv_to_proj(uv_b_A);
+	float3 deltapos_b_B = Camera::uv_to_proj(uv_b_B);
+
+	float plane_dist_t_A = abs(dot(n, deltapos_t_A - p)) + 1e-5;
+	float plane_dist_t_B = abs(dot(n, deltapos_t_B - p)) + 1e-5;
+	float plane_dist_b_A = abs(dot(n, deltapos_b_A - p)) + 1e-5;
+	float plane_dist_b_B = abs(dot(n, deltapos_b_B - p)) + 1e-5;
+
+	p += dot(tex2D(ColorInput, i.uv).rgb, 0.3333) * n;
+	deltapos_t_A += dot(tex2D(ColorInput, uv_t_A).rgb, 0.3333) * n;
+	deltapos_t_B += dot(tex2D(ColorInput, uv_t_B).rgb, 0.3333) * n;
+	deltapos_b_A += dot(tex2D(ColorInput, uv_b_A).rgb, 0.3333) * n;
+	deltapos_b_B += dot(tex2D(ColorInput, uv_b_B).rgb, 0.3333) * n;
+
+	float3 ddx_t = (deltapos_t_A - p) / plane_dist_t_A + (p - deltapos_t_B) / plane_dist_t_B;
+	float3 ddx_b = (deltapos_b_A - p) / plane_dist_b_A + (p - deltapos_b_B) / plane_dist_b_B;
+
+	float3 cross_n = normalize(cross(ddx_t, ddx_b));
+
+	if(ENABLE_TEXTURED_NORMALS) n = normalize(n + cross_n * tempF1.z);
+*/
+	o = Math::octahedral_enc(n);
+
+
 }
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0
