@@ -51,10 +51,6 @@
  #define LAUNCHPAD_DEBUG_OUTPUT 	  	0		//[0 or 1] 1: enables debug output of the motion vectors
 #endif
 
-#ifndef LAUNCHPAD_TEXTURED_NORMALS
- #define LAUNCHPAD_TEXTURED_NORMALS 	1		//[0-2] 0=off, 1=on
-#endif
-
 /*=============================================================================
 	UI Uniforms
 =============================================================================*/
@@ -80,7 +76,13 @@ uniform bool ENABLE_SMOOTH_NORMALS <
 	ui_category = "Normal Vectors";	
 > = false;
 
-#if LAUNCHPAD_TEXTURED_NORMALS
+uniform bool ENABLE_TEXTURED_NORMALS <	
+	ui_label = "Enable Texture Normals";
+	ui_tooltip = "Estimates surface relief based on color information, for more accurate geometry representation.\n"
+	             "Requires smooth normals to be enabled!";	
+	ui_category = "Normal Vectors";	
+> = false;
+
 uniform float TEXTURED_NORMALS_RADIUS <
 	ui_type = "drag";
 	ui_label = "Textured Normals Sample Radius";
@@ -98,15 +100,13 @@ uniform float TEXTURED_NORMALS_INTENSITY <
 	ui_category = "Normal Vectors";	
 > = 0.5;
 
-uniform float TEXTURED_NORMALS_CURVE <
-	ui_type = "drag";
-	ui_label = "Textured Normals Curve";
-	ui_tooltip = "Higher values restrict the relief to strongly contrasted texture details.";
-	ui_min = 0.0;
-	ui_max = 1.0;
-	ui_category = "Normal Vectors";	
-> = 0.5;
-#endif
+uniform int TEXTURED_NORMALS_QUALITY <
+	ui_type = "slider";
+	ui_min = 1; ui_max = 3;
+    ui_label = "Textured Normals Quality";
+    ui_tooltip = "Higher settings produce more accurate results, at a performance cost.";
+    ui_category = "Normal Vectors";	
+> = 2;
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0
 uniform int DEBUG_MODE < 
@@ -969,104 +969,85 @@ void SmoothNormalsPass0PS(in VSOUT i, out float4 o : SV_Target0)
 
 void SmoothNormalsPass1PS(in VSOUT i, out float2 o : SV_Target0)
 {	
-	//o = Math::octahedral_enc(-smooth_normals_mkii(i, 1, sSmoothNormalsTempTex1).xyz);
 	float3 n = -smooth_normals_mkii(i, 1, sSmoothNormalsTempTex1).xyz;
 
-#if LAUNCHPAD_TEXTURED_NORMALS	
-	float3 p = Camera::uv_to_proj(i.uv);
-	float luma = dot(tex2D(ColorInput, i.uv).rgb, 0.3333);
-	float2x3 kernel_matrix = to_tangent(n.zyx);
-
-	float3 v_y = normalize(p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(0, 2))) * 10.0 * saturate(TEXTURED_NORMALS_RADIUS) / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
-	float3 v_x = normalize(p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(2, 0))) * 10.0 * saturate(TEXTURED_NORMALS_RADIUS) / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
-
-	const float2 dirs[9] = 
+	[branch]
+	if(ENABLE_TEXTURED_NORMALS)
 	{
-		float2(-1,-1),//TL
-		float2(0,-1),//T
-		float2(1,-1),//TR
-		float2(1,0),//R
-		float2(1,1),//BR
-		float2(0,1),//B
-		float2(-1,1),//BL
-		float2(-1,0),//L
-		float2(-1,-1)//TL first duplicated at end cuz it might be best pair	
-	};
+		float3 p = Camera::uv_to_proj(i.uv);
+		float luma = dot(tex2D(ColorInput, i.uv).rgb, 0.3333);
 
-	float3 center_p_height = p + dot(tex2D(ColorInput, i.uv).rgb, 0.3333) * n;
+		float3 e_y = (p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(0, 2)));
+		float3 e_x = (p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(2, 0)));
+		e_y = normalize(cross(n, e_y));
+		e_x = normalize(cross(n, e_x));
 
-	float2 prev_uv = Camera::proj_to_uv(p + v_x * dirs[0].x + v_y * dirs[0].y);
-	float3 prev_p = Camera::uv_to_proj(prev_uv);
-	float3 prev_p_height = prev_p + dot(tex2D(ColorInput, prev_uv).rgb, 0.3333) * n;
-	float prev_planedist = abs(dot(n, prev_p - p)) + 1e-5;
+		float radius_scale = (1 + 8.0 * saturate(TEXTURED_NORMALS_RADIUS)) / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
 
-	float3 summed_normal = 0;
+		float3 v_y = e_y * radius_scale;
+		float3 v_x = e_x * radius_scale;
 
-	[loop]
-	for(int j = 1; j < 9; j++)
-	{
-		float2 curr_uv = Camera::proj_to_uv(p + v_x * dirs[j].x + v_y * dirs[j].y);
-		float3 curr_p = Camera::uv_to_proj(curr_uv);
-		float3 curr_p_height = curr_p + dot(tex2D(ColorInput, curr_uv).rgb, 0.3333) * n;
-		float curr_planedist = abs(dot(n, curr_p - p)) + 1e-5;
+		float3 center_color = tex2D(ColorInput, i.uv).rgb;
+		float center_luma = dot(center_color * center_color, float3(0.2126, 0.7152, 0.0722));
 
-		float w = rcp(0.05 + prev_planedist + curr_planedist);
-		float3 curr_n = cross(prev_p_height - center_p_height, curr_p_height - center_p_height);
-		 w *= rsqrt(1e-5 + dot(curr_n, curr_n));
-		summed_normal += curr_n * w;
+		float3 center_p_height = p + center_luma * n;
+		float3 summed_normal = n * 0.01;
 
-		prev_planedist = curr_planedist;
-		prev_p_height = curr_p_height;
-	}
+		int octaves = TEXTURED_NORMALS_QUALITY;	
 
-	float normal_len = length(summed_normal);
-	summed_normal = normalize(summed_normal + n * saturate(1 - normal_len * normal_len * 1000.0)); //!
-	float3 halfvector = n - (summed_normal) * 1.5 * saturate(TEXTURED_NORMALS_INTENSITY);
+		float total_luma = center_luma;
 
-	//float3 tangent = halfvector - dot(halfvector, n) / dot(halfvector, halfvector) * n;
+		[loop]
+		for(int octave = 0; octave < octaves; octave++)
+		{
+			float3 height[4];
+			float4 plane_dist;
 
-	float ilen = sqrt(dot(halfvector, halfvector)) + 1e-7;
-	n += (halfvector) / (ilen) * lerp(ilen, ilen * ilen * ilen * ilen, saturate(TEXTURED_NORMALS_CURVE));
+			float2 axis; sincos(HALF_PI * octave / float(octaves), axis.y, axis.x); //modulate directions per octave to get better rotation invariance
+			const float4 next_axis = Math::get_rotator(HALF_PI);
 
-	n = normalize(n);
-#endif
+			float fi = exp2(octave);
+			axis *= fi;
 
-	/*
+			[unroll]
+			for(int a = 0; a < 4; a++)
+			{
+				float3 virtual_p = p + v_x * axis.x + v_y * axis.y;
+				float2 uv = Camera::proj_to_uv(virtual_p);	
+				float3 actual_p = Camera::uv_to_proj(uv);
 
-	float3 deltav_t = normalize(p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(0, 1))) * tempF1.x;
-	float3 deltav_b = normalize(p - Camera::uv_to_proj(i.uv + BUFFER_PIXEL_SIZE * float2(1, 0))) * tempF1.x;
+				float3 tap_color = tex2Dlod(ColorInput, uv, 0).rgb;
+				float tap_luma = dot(tap_color * tap_color, float3(0.2126, 0.7152, 0.0722));
+				total_luma += tap_luma;
+				
+				height[a] = virtual_p + tap_luma * n;
+				plane_dist[a] = abs(dot(n, actual_p - p));
 
-	float2 uv_t_A = Camera::proj_to_uv(p + deltav_t);
-	float2 uv_t_B = Camera::proj_to_uv(p - deltav_t);
-	float2 uv_b_A = Camera::proj_to_uv(p + deltav_b);
-	float2 uv_b_B = Camera::proj_to_uv(p - deltav_b);
+				axis = Math::rotate_2D(axis, next_axis);
+			}
 
-	float3 deltapos_t_A = Camera::uv_to_proj(uv_t_A);
-	float3 deltapos_t_B = Camera::uv_to_proj(uv_t_B);
-	float3 deltapos_b_A = Camera::uv_to_proj(uv_b_A);
-	float3 deltapos_b_B = Camera::uv_to_proj(uv_b_B);
+			[unroll]
+			for(int j = 0; j < 4; j++)
+			{
+				uint this_idx = j;
+				uint next_idx = (j + 1) % 4;
 
-	float plane_dist_t_A = abs(dot(n, deltapos_t_A - p)) + 1e-5;
-	float plane_dist_t_B = abs(dot(n, deltapos_t_B - p)) + 1e-5;
-	float plane_dist_b_A = abs(dot(n, deltapos_b_A - p)) + 1e-5;
-	float plane_dist_b_B = abs(dot(n, deltapos_b_B - p)) + 1e-5;
+				float w = rcp(0.05 + plane_dist[this_idx] + plane_dist[next_idx]);
+				float3 curr_n = -cross(height[this_idx] - center_p_height, height[next_idx] - center_p_height);
+				curr_n *= rsqrt(1e-5 + dot(curr_n, curr_n));
+				w *= exp2(-octave);
+				summed_normal += curr_n * w;
+			}
+		}
 
-	p += dot(tex2D(ColorInput, i.uv).rgb, 0.3333) * n;
-	deltapos_t_A += dot(tex2D(ColorInput, uv_t_A).rgb, 0.3333) * n;
-	deltapos_t_B += dot(tex2D(ColorInput, uv_t_B).rgb, 0.3333) * n;
-	deltapos_b_A += dot(tex2D(ColorInput, uv_b_A).rgb, 0.3333) * n;
-	deltapos_b_B += dot(tex2D(ColorInput, uv_b_B).rgb, 0.3333) * n;
+		summed_normal.xyz = safenormalize(summed_normal.xyz);
+		float3 halfvec = n - summed_normal.xyz * 0.95;
+		halfvec.xyz /= lerp(total_luma, 0.5,  0.5);
+		n += halfvec * saturate(TEXTURED_NORMALS_INTENSITY * TEXTURED_NORMALS_INTENSITY * TEXTURED_NORMALS_INTENSITY) * 10.0;
+		n = normalize(n);
+	}	
 
-	float3 ddx_t = (deltapos_t_A - p) / plane_dist_t_A + (p - deltapos_t_B) / plane_dist_t_B;
-	float3 ddx_b = (deltapos_b_A - p) / plane_dist_b_A + (p - deltapos_b_B) / plane_dist_b_B;
-
-	float3 cross_n = normalize(cross(ddx_t, ddx_b));
-
-	if(ENABLE_TEXTURED_NORMALS) n = normalize(n + cross_n * tempF1.z);
-*/
 	o = Math::octahedral_enc(n);
-
-
 }
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0
