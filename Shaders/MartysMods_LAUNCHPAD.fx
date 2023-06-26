@@ -982,7 +982,7 @@ void SmoothNormalsPass1PS(in VSOUT i, out float2 o : SV_Target0)
 		e_y = normalize(cross(n, e_y));
 		e_x = normalize(cross(n, e_x));
 
-		float radius_scale = (1 + 8.0 * saturate(TEXTURED_NORMALS_RADIUS)) / RESHADE_DEPTH_LINEARIZATION_FAR_PLANE;
+		float radius_scale = (1 + 8.0 * saturate(TEXTURED_NORMALS_RADIUS)) / 50.0;
 
 		float3 v_y = e_y * radius_scale;
 		float3 v_x = e_x * radius_scale;
