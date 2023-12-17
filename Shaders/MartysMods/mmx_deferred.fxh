@@ -23,8 +23,8 @@
 namespace Deferred 
 {
 //normals, RG8 octahedral encoded 
-texture NormalsTex              { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG8;       };
-sampler sNormalsTex             { Texture = NormalsTex; };
+texture NormalsTex              { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16;       };
+sampler sNormalsTex             { Texture = NormalsTex; MinFilter = POINT; MipFilter = POINT; MagFilter = POINT;};
 
 //motion vectors, RGBA16F, XY = delta uv, Z = confidence, W = depth because why not
 texture MotionVectorsTex        { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;     };

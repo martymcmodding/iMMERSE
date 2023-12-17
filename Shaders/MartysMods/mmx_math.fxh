@@ -128,9 +128,10 @@ bool inside_screen(float2 uv)
 //normalized 3D in, [0, 1] 2D out
 float2 octahedral_enc(in float3 v) 
 {
-    float2 result = v.xy * rcp(dot(abs(v), 1));
-    float2 t = (1.0 - abs(result.yx)) * fast_sign(result.xy);
-    return (v.z < 0 ? t : result) * 0.5 + 0.5;
+    float2 result = v.xy * rcp(dot(abs(v), 1)); 
+    float2 sgn = fast_sign(v.xy);
+    result = v.z < 0 ? sgn - abs(result.yx) * sgn : result;
+    return result * 0.5 + 0.5;
 }
 
 //[0, 1] 2D in, normalized 3D out

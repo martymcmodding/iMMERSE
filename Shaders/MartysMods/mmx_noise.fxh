@@ -48,12 +48,10 @@ float3 rand3_from_uint(uint x)
     return float3((x >> uint3(0, 10, 20)) & 0x3FF) * exp2(-10.0);
 }
 
-float3 rand4_from_uint(uint x)
+float4 rand4_from_uint(uint x)
 {
     return float4((x >> uint4(0, 8, 16, 24)) & 0xFF) * exp2(-8.0);
 }
-
-
 
 //2x uniform [0, 1] -> 2x gaussian distributed with sigma 1   
 float2 box_muller(float2 unirand01)

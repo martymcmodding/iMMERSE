@@ -331,7 +331,8 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 		m_xx += t_local * t_local;
 		m_yy += t_search * t_search;
 		m_xy += t_local * t_search;
-	}	
+
+	}
 
 	float variance = abs(m_xx.x / (blocksize * blocksize) - m_x.x * m_x.x / ((blocksize * blocksize)*(blocksize * blocksize)));
 	float best_sim = minc(m_xy * rsqrt(m_xx * m_yy));
@@ -370,9 +371,8 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 				FEATURE_TYPE t = get_prev_feature(search_center + float2(k % blocksize, k / blocksize) * texelsize * search_scale, level).FEATURE_COMPS;
 				m_yy += t * t;
 				m_xy += local_block[k] * t;
-			}	
-
-			float sim = minc(m_xy * rsqrt(m_xx * m_yy));	
+			}
+			float sim = minc(m_xy * rsqrt(m_xx * m_yy));
 			if(sim < best_sim) continue;
 			
 			best_sim = sim;
@@ -595,7 +595,7 @@ float3 showmotion(float2 motion)
 	float angle = atan2(motion.y, motion.x);
 	float dist = length(motion);
 	float3 rgb = saturate(3 * abs(2 * frac(angle / 6.283 + float3(0, -1.0/3.0, 1.0/3.0)) - 1) - 1);
-	return lerp(0.5, rgb, saturate(dist * 100));
+	return lerp(0.5, rgb, saturate(dist * 400));
 }
 
 //turbo colormap fit, turned into MADD form
@@ -790,13 +790,13 @@ void NormalsPS(in VSOUT i, out float2 o : SV_Target0)
 
 //gbuffer halfres for fast filtering
 texture SmoothNormalsTempTex0  { Width = BUFFER_WIDTH/2;   Height = BUFFER_HEIGHT/2;   Format = RGBA16F;  };
-sampler sSmoothNormalsTempTex0 { Texture = SmoothNormalsTempTex0; };
+sampler sSmoothNormalsTempTex0 { Texture = SmoothNormalsTempTex0; MinFilter = POINT; MagFilter = POINT; MipFilter = POINT; };
 //gbuffer halfres for fast filtering
 texture SmoothNormalsTempTex1  { Width = BUFFER_WIDTH/2;   Height = BUFFER_HEIGHT/2;   Format = RGBA16F;  };
-sampler sSmoothNormalsTempTex1 { Texture = SmoothNormalsTempTex1; };
+sampler sSmoothNormalsTempTex1 { Texture = SmoothNormalsTempTex1; MinFilter = POINT; MagFilter = POINT; MipFilter = POINT;  };
 //high res copy back so we can fetch center tap at full res always
-texture SmoothNormalsTempTex2  < pooled = true; > { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG8;  };
-sampler sSmoothNormalsTempTex2 { Texture = SmoothNormalsTempTex2; };
+texture SmoothNormalsTempTex2  < pooled = true; > { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16;  };
+sampler sSmoothNormalsTempTex2 { Texture = SmoothNormalsTempTex2; MinFilter = POINT; MagFilter = POINT; MipFilter = POINT;  };
 
 void CopyNormalsPS(in VSOUT i, out float2 o : SV_Target0)
 {
@@ -867,8 +867,8 @@ float4 smooth_normals_mkii(in VSOUT i, int iteration, sampler sGbuffer)
 	get_gbuffer_hi(i.uv, p, n);
 	float2x3 kernel_matrix = to_tangent(n);
 
-	float4 bin_front = float4(n, 1) * 0.15;
-	float4 bin_back = float4(n, 1) * 0.15;
+	float4 bin_front = float4(n, 1) * 0.001;
+	float4 bin_back = float4(n, 1) * 0.001;
 
 	float2 sigma_n = cos(radians(angle_tolerance));
 
@@ -885,6 +885,7 @@ float4 smooth_normals_mkii(in VSOUT i, int iteration, sampler sGbuffer)
 
 			float2 sample_dir = normalize(Camera::proj_to_uv(p + 0.1 * mul(kernel_dir, kernel_matrix)) - i.uv);
 			//sample_dir = 0.8 * BUFFER_ASPECT_RATIO * kernel_dir;//
+			//sample_dir = kernel_dir * 0.2;
 
 			float2 sample_uv = i.uv + sample_dir * r * radius_mult;
 			if(!Math::inside_screen(sample_uv)) break;
@@ -1071,9 +1072,7 @@ void DebugPS(in VSOUT i, out float3 o : SV_Target0)
 		case 1: o = showmotion(Deferred::get_motion(i.uv)); break;
 		case 2: o = Deferred::get_normals(i.uv) * 0.5 + 0.5; break;
 		case 3: o = gradient(Depth::get_linear_depth(i.uv)); break;
-	}
-
-	//o = linearstep(tempF2.x, 1, tex2D(sMotionTexIntermediate2, i.uv).w);
+	}	
 }
 #endif
 

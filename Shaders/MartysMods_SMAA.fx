@@ -222,7 +222,7 @@ sampler searchLUTSampler {	Texture = searchLUT; MipFilter = POINT; MinFilter = P
 #define SMAA_SEARCHTEX_SELECT(sample)   sample.r
 
 //integer divide, rounding up
-#define CEIL_DIV(num, denom) (((num - 1) / denom) + 1)
+#define CEIL_DIV(num, denom) ((((num) - 1) / (denom)) + 1)
 
 struct VSOUT
 {
@@ -971,22 +971,6 @@ void SMAABlendingWeightCalculationWrapCS(in CSIN i)
     }
 }
 
-/*
-//GPU Bitonic sort
-    for(uint g = 1; g <= logn2; g++) 
-    {
-		for (uint t = g; t > 0; t--) 
-        {			
-            uint map = (i.threadid / (1u << (t - 1u))) * (1u << t) + (i.threadid % (1u << (t - 1u)));
-            uint pos = (map / (1u << g)) & 1u;
-            uint m1 = (pos == 0) ? map : (map + (1u << (t - 1u)));
-		    uint m2 = (pos != 0) ? map : (map + (1u << (t - 1u)));
-            atomicMin(grouped_work_indices[m1], atomicMax(grouped_work_indices[m2], grouped_work_indices[m1]));
-            barrier();			
-		}
-	}
-*/
-
 #endif //_COMPUTE_SUPPORTED
 
 /*=============================================================================
@@ -1123,7 +1107,6 @@ technique MartysMods_AntiAliasing
 		StencilRef = 1;
 	}
 #endif
-
     pass NeighborhoodBlendingPass
 	{
 		VertexShader = SMAANeighborhoodBlendingWrapVS;
