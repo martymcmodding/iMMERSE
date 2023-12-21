@@ -62,7 +62,13 @@ uniform float FILTER_RADIUS <
 	ui_max = 6.0;
 	ui_category = "Optical Flow";		
 > = 4.0;
-
+uniform float FILTER_RADIUS2 <
+	ui_type = "drag";
+	ui_label = "Optical Flow Filter Smoothness222";
+	ui_min = 0.0;
+	ui_max = 6.0;
+	ui_category = "Optical Flow";		
+> = 4.0;
 uniform bool ENABLE_SMOOTH_NORMALS <	
 	ui_label = "Enable Smooth Normals";
 	ui_tooltip = "Filters the normal buffer to reduce low-poly look in MXAO and RTGI."
@@ -143,7 +149,7 @@ uniform int UIHELP <
 	ui_category_closed = false;
 >;
 
-/*
+
 uniform float4 tempF1 <
     ui_type = "drag";
     ui_min = -100.0;
@@ -161,7 +167,16 @@ uniform float4 tempF3 <
     ui_min = -100.0;
     ui_max = 100.0;
 > = float4(1,1,1,1);
-*/
+uniform float4 tempF4 <
+    ui_type = "drag";
+    ui_min = -100.0;
+    ui_max = 100.0;
+> = float4(1,1,1,1);
+
+uniform bool debug_key_down < source = "key"; keycode = 0x46; mode = ""; >;
+
+
+
 
 /*=============================================================================
 	Textures, Samplers, Globals, Structs
@@ -198,25 +213,27 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #define OCTAVE_SAMPLES             	4
 
 uniform uint FRAMECOUNT < source = "framecount"; >;
+uniform float FRAMETIME < source = "frametime"; >;
 
 #define MAX_MIP  	6 //do not change, tied to textures
 #define MIN_MIP 	OPTICAL_FLOW_RESOLUTION
+#define MIP_BIAS 	1
 
-texture MotionTexIntermediate6               { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RGBA16F;  };
-sampler sMotionTexIntermediate6              { Texture = MotionTexIntermediate6; };
-texture MotionTexIntermediate5               { Width = BUFFER_WIDTH >> 5;   Height = BUFFER_HEIGHT >> 5;   Format = RGBA16F;  };
-sampler sMotionTexIntermediate5              { Texture = MotionTexIntermediate5; };
-texture MotionTexIntermediate4               { Width = BUFFER_WIDTH >> 4;   Height = BUFFER_HEIGHT >> 4;   Format = RGBA16F;  };
-sampler sMotionTexIntermediate4              { Texture = MotionTexIntermediate4; };
-texture MotionTexIntermediate3               { Width = BUFFER_WIDTH >> 3;   Height = BUFFER_HEIGHT >> 3;   Format = RGBA16F;  };
-sampler sMotionTexIntermediate3              { Texture = MotionTexIntermediate3; };
-texture MotionTexIntermediate2               { Width = BUFFER_WIDTH >> 2;   Height = BUFFER_HEIGHT >> 2;   Format = RGBA16F;  };
-sampler sMotionTexIntermediate2              { Texture = MotionTexIntermediate2; };
-texture MotionTexIntermediate1               { Width = BUFFER_WIDTH >> 1;   Height = BUFFER_HEIGHT >> 1;   Format = RGBA16F;  };
-sampler sMotionTexIntermediate1              { Texture = MotionTexIntermediate1; };
+texture MotionTexIntermediateTex6               { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RGBA16F;};
+sampler sMotionTexIntermediateTex6              { Texture = MotionTexIntermediateTex6; };
+texture MotionTexIntermediateTex5               { Width = BUFFER_WIDTH >> 5;   Height = BUFFER_HEIGHT >> 5;   Format = RGBA16F;};
+sampler sMotionTexIntermediateTex5              { Texture = MotionTexIntermediateTex5; };
+texture MotionTexIntermediateTex4               { Width = BUFFER_WIDTH >> 4;   Height = BUFFER_HEIGHT >> 4;   Format = RGBA16F;};
+sampler sMotionTexIntermediateTex4              { Texture = MotionTexIntermediateTex4; };
+texture MotionTexIntermediateTex3               { Width = BUFFER_WIDTH >> 3;   Height = BUFFER_HEIGHT >> 3;   Format = RGBA16F;MipLevels = 2;};
+sampler sMotionTexIntermediateTex3              { Texture = MotionTexIntermediateTex3; };
+texture MotionTexIntermediateTex2               { Width = BUFFER_WIDTH >> 2;   Height = BUFFER_HEIGHT >> 2;   Format = RGBA16F;MipLevels = 3;};
+sampler sMotionTexIntermediateTex2              { Texture = MotionTexIntermediateTex2; };
+texture MotionTexIntermediateTex1               { Width = BUFFER_WIDTH >> 1;   Height = BUFFER_HEIGHT >> 1;   Format = RGBA16F;MipLevels = 4;};
+sampler sMotionTexIntermediateTex1              { Texture = MotionTexIntermediateTex1;};
 
-#define MotionTexIntermediate0 				Deferred::MotionVectorsTex
-#define sMotionTexIntermediate0 			Deferred::sMotionVectorsTex
+#define MotionTexIntermediateTex0 				Deferred::MotionVectorsTex
+#define sMotionTexIntermediateTex0 			Deferred::sMotionVectorsTex
 
 #if OPTICAL_FLOW_MATCHING_LAYERS == 0
  #define FEATURE_FORMAT 	R8 
@@ -301,45 +318,72 @@ float3 jitter(in int2 pos)
 
 float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksize)
 {	
-	level = max(level - 1, 0); //sample one higher res for better quality
+	level = clamp(level - MIP_BIAS, MIN_MIP, MAX_MIP);
 	float2 texelsize = rcp(tex2Dsize(sFeatureLayerPyramid, max(0, level - MIN_MIP)));
 	
-	FEATURE_TYPE local_block[16];
+	float local_block[13];
 
 	float2 total_motion = coarse_layer.xy;
 	float coarse_sim = coarse_layer.w;
 
-	FEATURE_TYPE m_x = 0;
-	FEATURE_TYPE m_xx = 0;
-	FEATURE_TYPE m_yy = 0;
-	FEATURE_TYPE m_xy = 0;
+	float m_x = 0;
+	float m_xx = 0;
+	float m_yy = 0;
+	float m_xy = 0;
 
-	float search_scale = 3;
-	i.uv -= texelsize * (blocksize / 2) * search_scale; //since we only use to sample the blocks now, offset by half a block so we can do it easier inline
+	float search_scale = min(1 + level, 3);
 
-	[unroll] //array index not natively addressable bla...
-	for(uint k = 0; k < blocksize * blocksize; k++)
+	//                          o  
+	//      o      o o o      o o o 
+	//    o x o    o x o    o o x o o
+	//      o      o o o      o o o 
+	//                          o
+
+	static const float2 block_kernel[13] = 
 	{
-		float2 offs = float2(k % blocksize, k / blocksize);
-		float2 tuv = i.uv + offs * texelsize * search_scale;
-		FEATURE_TYPE t_local = get_curr_feature(tuv, level).FEATURE_COMPS; 	
-		FEATURE_TYPE t_search = get_prev_feature(tuv + total_motion, level).FEATURE_COMPS;		
+		//center
+		float2(0, 0),
+		//cross
+		float2(0, -1),		
+		float2(0, 1),
+		float2(-1, 0),	
+		float2(1, 0),
+		//3x3 complete
+		float2(-1, -1),
+		float2(-1, 1),
+		float2(1, -1),
+		float2(1, 1),
+		//extensions
+		float2(-2, 0),
+		float2(2, 0),
+		float2(0, -2),
+		float2(0, 2)
+	};
+
+	float prev_val = 0;
+	
+	[unroll] //array index not natively addressable bla...
+	for(uint k = 0; k < blocksize; k++)
+	{
+		float2 tuv = i.uv + block_kernel[k] * texelsize * search_scale;
+		float t_local = get_curr_feature(tuv, level).x; 	
+		float t_search = get_prev_feature(tuv + total_motion, level).x;		
 
 		local_block[k] = t_local;
-
+		
 		m_x += t_local;
 		m_xx += t_local * t_local;
 		m_yy += t_search * t_search;
 		m_xy += t_local * t_search;
-
 	}
 
-	float variance = abs(m_xx.x / (blocksize * blocksize) - m_x.x * m_x.x / ((blocksize * blocksize)*(blocksize * blocksize)));
+	const float normfact = 1.0 / blocksize;
+	float variance = abs(m_xx.x * normfact - m_x.x * m_x.x * normfact * normfact);
 	float best_sim = minc(m_xy * rsqrt(m_xx * m_yy));
 
 	//this fixes completely white areas from polluting the buffer with false offsets
 	if(variance < exp(-32.0) || best_sim > 0.999999) 
-		return float4(coarse_layer.xy, 0, 0);
+		return float4(total_motion, variance, 0);
 
 	float phi = radians(360.0 / OCTAVE_SAMPLES);
 	float4 rotator = Math::get_rotator(phi);	
@@ -347,14 +391,14 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 	randseed = QMC::roberts1(level, randseed);
 
 	float2 randdir; sincos(randseed * phi, randdir.x, randdir.y);
-	int _octaves = SEARCH_OCTAVES + (level >= 1 ? 4 : 0);
-
+	randdir *= 0.5 * tempF1.w;
+	int _octaves = SEARCH_OCTAVES + (level >= 1 ? 4 : 1);//level >= 1 ? 4 : 2;
+	
 	while(_octaves-- > 0)
 	{
-		_octaves = best_sim < 0.999999 ? _octaves : 0;
 		float2 local_motion = 0;
-
 		int _samples = OCTAVE_SAMPLES;
+		_octaves = best_sim < 0.999999 ? _octaves : 0;
 		while(_samples-- > 0)		
 		{
 			_samples = best_sim < 0.999999 ? _samples : 0;
@@ -364,11 +408,11 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 
 			m_yy = 0;
 			m_xy = 0;
-
-			[loop]
-			for(uint k = 0; k < blocksize * blocksize; k++)
+		
+			[unroll]
+			for(uint k = 0; k < blocksize; k++)
 			{
-				FEATURE_TYPE t = get_prev_feature(search_center + float2(k % blocksize, k / blocksize) * texelsize * search_scale, level).FEATURE_COMPS;
+				float t = get_prev_feature(search_center + block_kernel[k] * texelsize * search_scale, level).x;
 				m_yy += t * t;
 				m_xy += local_block[k] * t;
 			}
@@ -381,10 +425,9 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 		}
 		total_motion += local_motion;
 		randdir *= 0.5;
-	}
-
+	} 
 	
-	float4 curr_layer = float4(total_motion, variance, saturate(-acos(best_sim) * PI + 1.0));
+	float4 curr_layer = float4(total_motion, variance, saturate(1.0 - acos(best_sim) / HALF_PI));
 	return curr_layer;
 }
 
@@ -453,18 +496,42 @@ float4 harmonics_matching(VSOUT i, int level, float4 coarse_layer, const int blo
 		randdir *= 0.5;
 	}
 	
-	float4 curr_layer = float4(total_motion, 1.0, saturate(-acos(best_sim) * PI + 1.0));
+	float4 curr_layer = float4(total_motion, 1.0, saturate(best_sim));
 	return curr_layer;
 }
 
-float4 atrous_upscale(VSOUT i, int level, sampler sMotionLow, int rad)
-{	
-    float2 texelsize = rcp(tex2Dsize(sMotionLow));
+float filter_weight(float4 gbuffer, float center_z, float sample_z, int level)
+{
+	float2 sample_mv = gbuffer.xy;
+	float sample_var = gbuffer.z;
+	float sample_sim = gbuffer.w;
+
+	float ws = saturate(1.0 - sample_sim); ws *= ws; 
+	float wf = saturate(1 - 128 * sample_var) * tempF3.z;
+	float wm = 1024.0 * dot(sample_mv * BUFFER_SCREEN_SIZE, sample_mv * BUFFER_SCREEN_SIZE);
+	wm *= wm;
+
+	float wz = abs(center_z - sample_z) / max3(0.00001, center_z, sample_z);
+	wz *= 512.0;
+	wz = lerp(wz, 0, center_z * center_z);
+	float weight = exp2(-(wz + ws + wm + wf) * 4);	
+ 
+	return weight;
+}
+
+float4 median_upscale(VSOUT i, int level, sampler sMotionLow, int rad)
+{
+	float2 texelsize = rcp(tex2Dsize(sMotionLow));
 	float phi = QMC::roberts1(level * 0.2144, FRAMECOUNT % 16) * HALF_PI;
+
+ 
+
 	float4 kernelmat = Math::get_rotator(phi) * FILTER_RADIUS;
 
 	float4 sum = 0;
 	float wsum = 1e-6;
+
+	float center_z = get_curr_feature(i.uv, level - 2).y;
 
 	[loop]for(int x = -rad; x <= rad; x++)
 	[loop]for(int y = -rad; y <= rad; y++)
@@ -474,23 +541,29 @@ float4 atrous_upscale(VSOUT i, int level, sampler sMotionLow, int rad)
 		float2 sample_uv = i.uv + Math::rotate_2D(offs, kernelmat) * texelsize; 
 
 		float4 sample_gbuf = tex2Dlod(sMotionLow, sample_uv, 0);
+		float weight = filter_weight(sample_gbuf, center_z, get_curr_feature(sample_uv, level - 2).y, level);
+/*
+		float4 sample_gbuf = tex2Dlod(sMotionLow, sample_uv, 0);
 		float2 sample_mv = sample_gbuf.xy;
 		float sample_var = sample_gbuf.z;
 		float sample_sim = sample_gbuf.w;
 
-		float vv = dot(sample_mv, sample_mv);
-		float ws = saturate(1.0 - sample_sim); ws *= ws;
+		float ws = saturate(1.0 - tempF2.z * sample_sim); ws *= ws;
 		float wf = saturate(1 - sample_var * 128.0) * 3;
-		float wm = dot(sample_gbuf.xy, sample_gbuf.xy) * 4;
+		float wm = tempF2.y * dot(sample_mv, sample_mv) * 4;
 		float weight = exp2(-(ws + wm + wf) * 4);
 
+		float sample_z = get_curr_feature(sample_uv, level).y;
+		*/
+
 		weight *= all(saturate(sample_uv - sample_uv * sample_uv));
+		//weight = 1;
 		sum += sample_gbuf * weight;
 		wsum += weight;		
 	}
 
 	sum /= wsum;
-	return sum;	
+	return sum;
 }
 
 float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int rad)
@@ -512,17 +585,21 @@ float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int rad)
 		float2 sample_uv = i.uv + Math::rotate_2D(offs, kernelmat) * texelsize; 
 
 		float4 sample_gbuf = tex2Dlod(sMotionLow, sample_uv, 0);
+		float weight = filter_weight(sample_gbuf, center_z, get_curr_feature(sample_uv, level - 2).y, level);
+
+/*
+		float4 sample_gbuf = tex2Dlod(sMotionLow, sample_uv, 0);
 		float2 sample_mv = sample_gbuf.xy;
 		float sample_var = sample_gbuf.z;
 		float sample_sim = sample_gbuf.w;
 
 		float vv = dot(sample_mv, sample_mv);
 
-		float2 prev_mv = tex2Dlod(sMotionTexIntermediate0, sample_uv + sample_gbuf.xy, 0).xy;
+		float2 prev_mv = tex2Dlod(sMotionTexIntermediateTex0, sample_uv + sample_gbuf.xy, 0).xy;
 		float2 mvdelta = prev_mv - sample_mv;
 		float diff = dot(mvdelta, mvdelta) * rcp(1e-8 + max(vv, dot(prev_mv, prev_mv)));
 
-		float wd = 3.0 * diff;		
+		float wd = 0; //3.0 * diff;		
 		float ws = saturate(1.0 - sample_sim); ws *= ws;
 		float wf = saturate(1 - sample_var * 128.0) * 3;
 		float wm = dot(sample_gbuf.xy, sample_gbuf.xy) * 4;
@@ -531,9 +608,10 @@ float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int rad)
 
 		float sample_z = get_curr_feature(sample_uv, max(0, level - 2)).y;
 		float wz = abs(center_z - sample_z) / max3(0.00001, center_z, sample_z);
-		weight *= exp2(-wz * 4);
+		weight *= exp2(-wz * 10);*/
 
 		weight *= all(saturate(sample_uv - sample_uv * sample_uv));
+		//weight = 1;
 		sum += sample_gbuf * weight;
 		wsum += weight;
 	}
@@ -542,11 +620,83 @@ float4 atrous_upscale_temporal(VSOUT i, int level, sampler sMotionLow, int rad)
 	return sum;	
 }
 
+float get_jitter(uint2 p)
+{
+    uint tiles = 4;
+    uint jitter_idx = dot(p % tiles, uint2(1, tiles));
+    jitter_idx *= 11u;
+    return ((jitter_idx % (tiles * tiles)) + 0.5) / (tiles * tiles);
+}
+
+
+float filter_weight2(float4 gbuffer, float center_z, float sample_z, int level)
+{
+	float2 sample_mv = gbuffer.xy;
+	float sample_var = gbuffer.z;
+	float sample_sim = gbuffer.w;
+
+	float ws = saturate(1.0 - sample_sim); ws *= ws; 
+	float wf = saturate(1 - 128 * sample_var) * tempF3.z;
+	float wm = dot(sample_mv * BUFFER_ASPECT_RATIO, sample_mv * BUFFER_SCREEN_SIZE);	
+
+	float wz = abs(center_z - sample_z) / max3(0.00001, center_z, sample_z);
+	wz *= 6.0;
+	wz *= wz;
+	float weight = exp2(-(wz + ws + wm + wf) * 4);	
+ 
+	return weight;
+}
+
+float2 box_muller(float2 unirand01)
+{
+    float2 g; sincos(TAU * unirand01.x, g.x, g.y);
+    return g * sqrt(-2.0 * log(unirand01.y));
+}
+
+float4 new_filter(VSOUT i, int level, sampler sMotionLow, int rad)
+{	
+   	float2 texelsize = rcp(tex2Dsize(sMotionLow));
+
+	float sample_jitter = get_jitter(i.vpos.xy);
+	float phi = QMC::roberts1(level, 0.5) * HALF_PI;
+
+	
+	float radius = 10 * lerp(FILTER_RADIUS, FILTER_RADIUS2, linearstep(float(MIN_MIP), float(MAX_MIP), float(level)));
+	float4 kernelmat = Math::get_rotator(phi) * radius; 
+	float center_z = get_curr_feature(i.uv, max(0, level - MIN_MIP)).y;
+
+	int samples = (2*rad+1) * (2 * rad+1);
+
+	float final_wsum = 0.1;
+	float4 finalsum = tex2Dlod(sMotionLow, i.uv, 0) * final_wsum;
+	float2 sample_dir; sincos(2.3999632 * 16 * sample_jitter, sample_dir.x, sample_dir.y); //2.3999632 * 16
+
+	[loop]
+	for(int j = 0; j < samples; j++)
+	{
+		float fi = float(j + sample_jitter) / samples;
+		fi = sqrt(-2.0 * log(fi)); //stealing radius from box muller for gaussian importance sampling
+
+		float2 sample_uv = i.uv + sample_dir * texelsize * fi * radius;
+		sample_dir = mul(sample_dir, float2x2(0.76465, -0.64444, 0.64444, 0.76465)); 
+
+		float4 flow = tex2Dlod(sMotionLow, sample_uv, max(0, fi * radius * tempF4.x - tempF4.y));	
+		float weight = filter_weight2(flow, center_z, get_curr_feature(sample_uv, level - MIN_MIP).y, level);
+		weight *= all(saturate(sample_uv - sample_uv * sample_uv));
+		 
+		finalsum += flow * weight;
+		final_wsum += weight;		 
+	}
+
+	finalsum /= final_wsum;
+	return finalsum;
+}
+
 float4 motion_pass(in VSOUT i, sampler sMotionLow, int level, int filter_size, int block_size)
 {
 	float4 prior_motion = 0;
     if(level < MAX_MIP)
-    	prior_motion = atrous_upscale(i, level, sMotionLow, filter_size);	
+    	prior_motion = new_filter(i, level, sMotionLow, filter_size);	
 
 	if(level < MIN_MIP)
 		return prior_motion;
@@ -558,7 +708,7 @@ float4 motion_pass_with_temporal_filter(in VSOUT i, sampler sMotionLow, int leve
 {
 	float4 prior_motion = 0;
     if(level < MAX_MIP)
-    	prior_motion = atrous_upscale_temporal(i, level, sMotionLow, filter_size);	
+    	prior_motion = new_filter(i, level, sMotionLow, filter_size);	
 
 	if(level < MIN_MIP)
 		return prior_motion;
@@ -570,7 +720,7 @@ float4 motion_pass_with_temporal_filter_harmonics(in VSOUT i, sampler sMotionLow
 {
 	float4 prior_motion = 0;
     if(level < MAX_MIP)
-    	prior_motion = atrous_upscale_temporal(i, level, sMotionLow, filter_size);	
+    	prior_motion = new_filter(i, level, sMotionLow, filter_size);	
 
 	if(level < MIN_MIP)
 		return prior_motion;
@@ -582,7 +732,7 @@ float4 motion_pass_harmonics(in VSOUT i, sampler sMotionLow, int level, int filt
 {
 	float4 prior_motion = 0;
     if(level < MAX_MIP)
-    	prior_motion = atrous_upscale(i, level, sMotionLow, filter_size);	
+    	prior_motion = new_filter(i, level, sMotionLow, filter_size);	
 
 	if(level < MIN_MIP)
 		return prior_motion;
@@ -595,7 +745,7 @@ float3 showmotion(float2 motion)
 	float angle = atan2(motion.y, motion.x);
 	float dist = length(motion);
 	float3 rgb = saturate(3 * abs(2 * frac(angle / 6.283 + float3(0, -1.0/3.0, 1.0/3.0)) - 1) - 1);
-	return lerp(0.5, rgb, saturate(dist * 400));
+	return lerp(0.5, rgb, saturate(log(1 + dist * 1024.0 / FRAMETIME)));//normalize by frametime such that we don't need to adjust visualization intensity all the time
 }
 
 //turbo colormap fit, turned into MADD form
@@ -635,11 +785,16 @@ VSOUT MainVS(in uint id : SV_VertexID)
     FullscreenTriangleVS(id, o.vpos, o.uv); 
     return o;
 }
+texture2D StateCounterTex	{ Format = R32F;  	};
+sampler2D sStateCounterTex	{ Texture = StateCounterTex;  };
+
+float4 FrameWriteVS(in uint id : SV_VertexID) : SV_Position {return float4(!debug_key_down, !debug_key_down, 0, 1);}
+float  FrameWritePS(in float4 vpos : SV_Position) : SV_Target0 {return FRAMECOUNT;}
 
 void WriteFeaturePS(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
 {	
 	float4 feature_data = 0;
-#if MIN_MIP > 0	
+#if MIN_MIP > 0
 	const float4 radius = float4(0.7577, -0.7577, 2.907, 0);
 	const float2 weight = float2(0.37487566, -0.12487566);
 	feature_data.rgb =  weight.x * tex2D(ColorInput, i.uv + radius.xx * BUFFER_PIXEL_SIZE).xyz;
@@ -661,8 +816,40 @@ void WriteFeaturePS(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
 	o.x = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
 	o.y = feature_data.w;
 #endif
+
+	if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x + 1) discard;
 }
 
+void WriteFeaturePS2(in VSOUT i, out FEATURE_TYPE o : SV_Target0)
+{	
+	float4 feature_data = 0;
+#if MIN_MIP > 0
+	const float4 radius = float4(0.7577, -0.7577, 2.907, 0);
+	const float2 weight = float2(0.37487566, -0.12487566);
+	feature_data.rgb =  weight.x * tex2D(ColorInput, i.uv + radius.xx * BUFFER_PIXEL_SIZE).xyz;
+	feature_data.rgb += weight.x * tex2D(ColorInput, i.uv + radius.xy * BUFFER_PIXEL_SIZE).xyz;
+	feature_data.rgb += weight.x * tex2D(ColorInput, i.uv + radius.yx * BUFFER_PIXEL_SIZE).xyz;
+	feature_data.rgb += weight.x * tex2D(ColorInput, i.uv + radius.yy * BUFFER_PIXEL_SIZE).xyz;
+	feature_data.rgb += weight.y * tex2D(ColorInput, i.uv + radius.zw * BUFFER_PIXEL_SIZE).xyz;
+	feature_data.rgb += weight.y * tex2D(ColorInput, i.uv - radius.zw * BUFFER_PIXEL_SIZE).xyz;
+	feature_data.rgb += weight.y * tex2D(ColorInput, i.uv + radius.wz * BUFFER_PIXEL_SIZE).xyz;
+	feature_data.rgb += weight.y * tex2D(ColorInput, i.uv - radius.wz * BUFFER_PIXEL_SIZE).xyz;	
+#else	
+	feature_data.rgb = tex2D(ColorInput, i.uv).rgb;
+#endif	
+	feature_data.w = Depth::get_linear_depth(i.uv);	
+
+#if OPTICAL_FLOW_MATCHING_LAYERS == 0
+	o = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
+#else
+	o.x = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
+	o.y = feature_data.w;
+#endif
+
+	if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x) discard;
+}
+
+//yes I have thrown everything and the kitchen sink at this
 void generate_circular_harmonics(in VSOUT i, sampler s_features, out float4 coeffs0, out float4 coeffs1)
 {
 	float2 Y1 = 0;
@@ -716,18 +903,18 @@ void CircularHarmonicsPrevPS(in VSOUT i, out PSOUT2 o)
 	generate_circular_harmonics(i, sFeatureLayerPyramidPrev, o.t0, o.t1);
 }
 
-void MotionPS6(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate2, 6, 2, 4);}
-void MotionPS5(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate6, 5, 2, 4);}
-void MotionPS4(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate5, 4, 2, 4);}
-void MotionPS3(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate4, 3, 2, 4);}
+void MotionPS6(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediateTex2, 6, 2, 13);}
+void MotionPS5(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediateTex6, 5, 2, 13);}
+void MotionPS4(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediateTex5, 4, 2, 13);}
+void MotionPS3(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediateTex4, 3, 2, 13);}
 #if OPTICAL_FLOW_MATCHING_LAYERS == 2
-void MotionPS2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter_harmonics(i, sMotionTexIntermediate3, 2, 2, 4);}
-void MotionPS1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_harmonics(i, sMotionTexIntermediate2, 1, 1, 3);}
-void MotionPS0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_harmonics(i, sMotionTexIntermediate1, 0, 1, 2);}
+void MotionPS2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter_harmonics(i, sMotionTexIntermediateTex3, 2, 2, 13);}
+void MotionPS1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_harmonics(i, sMotionTexIntermediateTex2, 1, 1, 9);}
+void MotionPS0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_harmonics(i, sMotionTexIntermediateTex1, 0, 1, 5);}
 #else 
-void MotionPS2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediate3, 2, 2, 4);}
-void MotionPS1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate2, 1, 1, 3);}
-void MotionPS0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediate1, 0, 1, 2);}
+void MotionPS2(in VSOUT i, out float4 o : SV_Target0){o = motion_pass_with_temporal_filter(i, sMotionTexIntermediateTex3, 2, 2, 13);}
+void MotionPS1(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediateTex2, 1, 1, 9);}
+void MotionPS0(in VSOUT i, out float4 o : SV_Target0){o = motion_pass(i, sMotionTexIntermediateTex1, 0, 1, 5);}
 #endif
 
 /*=============================================================================
@@ -1098,6 +1285,11 @@ technique MartysMods_Launchpad
         "______________________________________________________________________________";
 >
 {
+	
+    
+	pass{PrimitiveTopology = POINTLIST;VertexCount = 1;VertexShader = FrameWriteVS;PixelShader  = FrameWritePS;RenderTarget = StateCounterTex;} 
+
+
 	pass {VertexShader = MainVS;PixelShader = NormalsPS; RenderTarget = Deferred::NormalsTex; }		
 	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsMakeGbufPS;  RenderTarget = SmoothNormalsTempTex0;}
 	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsPass0PS;  RenderTarget = SmoothNormalsTempTex1;}
@@ -1110,16 +1302,20 @@ technique MartysMods_Launchpad
 #if OPTICAL_FLOW_MATCHING_LAYERS == 2
 	pass {VertexShader = MainVS;PixelShader  = CircularHarmonicsPS;  RenderTarget0 = CircularHarmonicsPyramidCurr0; RenderTarget1 = CircularHarmonicsPyramidCurr1; }
 #endif
-	pass {VertexShader = MainVS;PixelShader = MotionPS6;RenderTarget = MotionTexIntermediate6;}
-    pass {VertexShader = MainVS;PixelShader = MotionPS5;RenderTarget = MotionTexIntermediate5;}
-    pass {VertexShader = MainVS;PixelShader = MotionPS4;RenderTarget = MotionTexIntermediate4;}
-    pass {VertexShader = MainVS;PixelShader = MotionPS3;RenderTarget = MotionTexIntermediate3;}
-    pass {VertexShader = MainVS;PixelShader = MotionPS2;RenderTarget = MotionTexIntermediate2;}
-    pass {VertexShader = MainVS;PixelShader = MotionPS1;RenderTarget = MotionTexIntermediate1;}
-    pass {VertexShader = MainVS;PixelShader = MotionPS0;RenderTarget = MotionTexIntermediate0;}
-	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget = FeatureLayerPyramidPrev; }
+	pass {VertexShader = MainVS;PixelShader = MotionPS6;RenderTarget = MotionTexIntermediateTex6;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS5;RenderTarget = MotionTexIntermediateTex5;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS4;RenderTarget = MotionTexIntermediateTex4;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS3;RenderTarget = MotionTexIntermediateTex3;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS2;RenderTarget = MotionTexIntermediateTex2;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS1;RenderTarget = MotionTexIntermediateTex1;}
+    pass {VertexShader = MainVS;PixelShader = MotionPS0;RenderTarget = MotionTexIntermediateTex0;}
+
+	
+
+	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS2; RenderTarget = FeatureLayerPyramidPrev; }
 #if LAUNCHPAD_DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
-	pass {VertexShader = MainVS;PixelShader  = DebugPS;  }		
+	pass {VertexShader = MainVS;PixelShader  = DebugPS;  }			
 #endif 
+
 
 }
