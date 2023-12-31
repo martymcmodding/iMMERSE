@@ -130,7 +130,7 @@ ui_type = "radio";
                  "   This allows to use Launchpad's smooth normals feature.";
 >;
 
-
+/*
 uniform float4 tempF1 <
     ui_type = "drag";
     ui_min = -100.0;
@@ -148,7 +148,7 @@ uniform float4 tempF3 <
     ui_min = -100.0;
     ui_max = 100.0;
 > = float4(1,1,1,1);
-
+*/
 
 /*=============================================================================
 	Textures, Samplers, Globals, Structs
@@ -404,10 +404,6 @@ float bitfield_countones(float bitfield)
     return sum;
 }
 
-texture ZThicknessTex { Width = BUFFER_WIDTH/3;   Height = BUFFER_HEIGHT/3;   Format = R16F; };
-sampler sZThicknessTex { Texture = ZThicknessTex; };
-
-
 float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
 { 	
     float z = tex2Dlod(sZSrc, uv.xy, 0).x;
@@ -502,9 +498,6 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
 #else      
                     float ddotv = dot(deltavec, v);
                     float ddotd = dot(deltavec, deltavec);
-
-                    //if(tempF2.x > 0) T = tex2Dlod(sZThicknessTex, tap_uv[pair].zw, 0).x;
-
 
                     float2 h_frontback = float2(ddotv, ddotv - T) * rsqrt(float2(ddotd, ddotd - 2 * T * ddotv + T * T));
 
@@ -722,73 +715,6 @@ void Filter2PS(in VSOUT i, out float3 o : SV_Target0)
     o = MXAO_DEBUG_VIEW_ENABLE ? mxao : color;
 }
 
-/*
-void ThicknessEstimatePS(in VSOUT i, out float3 o : SV_Target0)
-{
-    float3 p = Camera::uv_to_proj(i.uv);
-    float3 n = Deferred::get_normals(i.uv);
-    float3 v = normalize(p);
-
-    float minthickness = 10000;
-
-    float avgthickness = 0;
-
-    for(int j = 0; j < 4; j++)
-    {
-        float2 dir; sincos(PI * j / 4.0, dir.y, dir.x); 
-
-        float2 minlen = 0;  
-        bool exited_early = false;     
-
-        for(int side = 0; side < 2; side++)
-        {
-            float3 last_n = n;
-            float3 last_p = p;            
-
-            for(int s = 0; s < 10; s++)
-            {
-                float fi = (s + 0.5) / 10.0; 
-                fi = exp2(7 * fi - 7);
-
-                float2 sample_uv = i.uv + BUFFER_ASPECT_RATIO * fi * (side > 0 ? 1 : -1) * dir * 0.05 * tempF1.x * tempF1.x / p.z;
-
-                if(!all(saturate(sample_uv-sample_uv*sample_uv))) 
-                {
-                     exited_early = true;
-                     break;
-                }
-
-                float3 sp = Camera::uv_to_proj(sample_uv);
-                float3 sn = Deferred::get_normals(sample_uv);
-
-                float3 deltav = sp - last_p;
-                float isbelow = saturate(-dot(last_n, deltav)*100.0);
-                float isdiscont = dot(normalize(deltav), normalize(sp)) > tempF1.y;
-
-                if(isbelow > 0.5 && isdiscont > 0.5)
-                {
-                   
-                    break;
-                }
-                last_n = sn;
-                last_p = sp;                
-            }
-
-            minlen.x = distance(last_p , p);
-            minlen = minlen.yx;
-        }
-
-        if(exited_early) minlen = max(minlen.x, minlen.y);
-        minthickness = min(minthickness, dot(minlen, 1));
-
-        avgthickness += dot(minlen, 1);
-    }
-
-    o = minthickness;
-    o = avgthickness / 7.0 * tempF1.z;
-}
-*/
-
 /*=============================================================================
 	Techniques
 =============================================================================*/
@@ -811,11 +737,6 @@ technique MartysMods_MXAO
         "______________________________________________________________________________";
 >
 {
-    //pass { VertexShader = MainVS; PixelShader = ThicknessEstimatePS; RenderTarget = ZThicknessTex; }
-
-    
-
-
 #if _COMPUTE_SUPPORTED
     pass 
     { 
