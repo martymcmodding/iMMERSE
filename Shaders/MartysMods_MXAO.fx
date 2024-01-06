@@ -163,9 +163,6 @@ texture DepthInputTex : DEPTH;
 sampler ColorInput 	{ Texture = ColorInputTex; };
 sampler DepthInput  { Texture = DepthInputTex; };
 
-texture ZSrc { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = R16F; };
-sampler sZSrc { Texture = ZSrc; MinFilter=POINT; MipFilter=POINT; MagFilter=POINT;};
-
 texture AOTex1 { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
 texture AOTex2 { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
 
@@ -215,7 +212,9 @@ texture3D ZSrc3D
 };
 sampler3D sZSrc3D { Texture = ZSrc3D; MinFilter=POINT; MipFilter=POINT; MagFilter=POINT;};
 storage3D stZSrc3D { Texture = ZSrc3D; };
-
+#else 
+texture ZSrc { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = R16F; };
+sampler sZSrc { Texture = ZSrc; MinFilter=POINT; MipFilter=POINT; MagFilter=POINT;};
 #endif
 
 struct VSOUT
@@ -236,13 +235,13 @@ static const uint2 samples_per_preset[7] =
 {
 //  slices/steps    preset            samples 
     uint2(2, 2),    //Low             8
-    uint2(4, 2),    //Medium          16
-    uint2(5, 4),    //High            40
-    uint2(6, 6),    //Very High       72
-    uint2(6, 9),    //Ultra           90
-    uint2(8, 12),   //Extreme         192
-    uint2(10, 24)   //IDGAF           480
-};   
+    uint2(2, 4),    //Medium          16
+    uint2(2, 10),   //High            40
+    uint2(3, 12),   //Very High       72
+    uint2(4, 14),   //Ultra           112
+    uint2(6, 16),   //Extreme         192
+    uint2(8, 20)    //IDGAF           320
+};
 
 /*=============================================================================
 	Functions
@@ -548,22 +547,25 @@ float2 MXAOFused(uint2 screenpos, float4 uv, float depth_layer)
     float falloff_factor = rcp(worldspace_radius);
     falloff_factor *= falloff_factor;
 
+    //terms for the GTAO slice weighting logic, math has been extremely simplified but is
+    //entirely unrecognizable now. 26 down to 19 instructions though :yeahboiii:
+    float2 vcrossn_xy = float2(v.yz * n.zx - v.zx * n.yz);//cross(v, n).xy;
+    float ndotv = dot(n, v);
+
     while(slice_count-- > 0) //1 less register and a bit faster
     {        
         slice_dir.xy = mul(slice_dir.xy, rotslice);
-        float3 ortho_dir = slice_dir - dot(slice_dir.xy, v.xy) * v; //z = 0 so no need for full dot3
-        
-        float3 slice_n = cross(slice_dir, v); 
-        slice_n *= rsqrt(dot(slice_n, slice_n));   
-
         float4 scaled_dir = (slice_dir.xy * screenspace_radius).xyxy * texture_scale; 
-
-        float3 n_proj_on_slice = n - slice_n * dot(n, slice_n);
-        float sliceweight = sqrt(dot(n_proj_on_slice, n_proj_on_slice));
-          
-        float cosn = saturate(dot(n_proj_on_slice, v) * rcp(sliceweight));
-        float normal_angle = Math::fast_acos(cosn) * Math::fast_sign(dot(ortho_dir, n_proj_on_slice));
         
+        float sdotv = dot(slice_dir.xy, v.xy);
+        float sdotn = dot(slice_dir.xy, n.xy); 
+        float ndotns = dot(slice_dir.xy, vcrossn_xy) * rsqrt(saturate(1 - sdotv * sdotv));
+     
+        float sliceweight = sqrt(saturate(1 - ndotns * ndotns));//length of projected normal on slice
+        float cosn = saturate(ndotv * rcp(sliceweight));
+        float normal_angle = Math::fast_acos(cosn);
+        normal_angle = sdotn < sdotv * ndotv ? -normal_angle : normal_angle;
+
         float2 maxhorizoncos = sin(normal_angle); maxhorizoncos.y = -maxhorizoncos.y; //cos(normal_angle -+ pi/2)  
         bitfield_init();
 
