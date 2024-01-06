@@ -24,7 +24,7 @@
 
 ===============================================================================
 
-    MXAO v1.0
+    MXAO v1.1
 
     Author:         Pascal Gilcher
 
@@ -154,8 +154,6 @@ uniform float4 tempF3 <
 	Textures, Samplers, Globals, Structs
 =============================================================================*/
 
-#pragma warning(disable : 4000) //uninitialized variable in AO pass at the early out... bruh
-
 //do NOT change anything here. "hurr durr I changed this and now it works"
 //you ARE breaking things down the line, if the shader does not work without changes
 //here, it's by design.
@@ -193,6 +191,7 @@ sampler sAOTex2 { Texture = AOTex2; };
 //integer divide, rounding up
 #define CEIL_DIV(num, denom) (((num - 1) / denom) + 1)
 
+
 #if ((BUFFER_WIDTH/4)*4) == BUFFER_WIDTH
  #define DEINTERLEAVE_HIGH       0
  #define DEINTERLEAVE_TILE_COUNT 4u
@@ -204,9 +203,19 @@ sampler sAOTex2 { Texture = AOTex2; };
 uniform uint FRAMECOUNT < source = "framecount"; >;
 
 #if _COMPUTE_SUPPORTED
-storage stZSrc       { Texture = ZSrc;            };
 storage stAOTex1       { Texture = AOTex1;        };
 storage stAOTex2       { Texture = AOTex2;        };
+
+texture3D ZSrc3D 
+{ 
+    Width = BUFFER_WIDTH/DEINTERLEAVE_TILE_COUNT;   
+    Height = BUFFER_HEIGHT/DEINTERLEAVE_TILE_COUNT;   
+    Depth = DEINTERLEAVE_TILE_COUNT * DEINTERLEAVE_TILE_COUNT;   
+    Format = R16F;
+};
+sampler3D sZSrc3D { Texture = ZSrc3D; MinFilter=POINT; MipFilter=POINT; MagFilter=POINT;};
+storage3D stZSrc3D { Texture = ZSrc3D; };
+
 #endif
 
 struct VSOUT
@@ -222,6 +231,18 @@ struct CSIN
     uint3 dispatchthreadid  : SV_DispatchThreadID;      //XYZ idx of thread inside dispatch
     uint threadid           : SV_GroupIndex;            //flattened idx of thread inside group
 };
+
+static const uint2 samples_per_preset[7] = 
+{
+//  slices/steps    preset            samples 
+    uint2(2, 2),    //Low             8
+    uint2(4, 2),    //Medium          16
+    uint2(5, 4),    //High            40
+    uint2(6, 6),    //Very High       72
+    uint2(6, 9),    //Ultra           90
+    uint2(8, 12),   //Extreme         192
+    uint2(10, 24)   //IDGAF           480
+};   
 
 /*=============================================================================
 	Functions
@@ -261,6 +282,7 @@ float2 deinterleave_uv(float2 uv)
     splituv = frac(splituv) + splitoffset * BUFFER_PIXEL_SIZE;
     return splituv;
 }
+
 float2 reinterleave_uv(float2 uv)
 {
     uint2 whichtile = floor(uv / BUFFER_PIXEL_SIZE) % DEINTERLEAVE_TILE_COUNT;
@@ -316,6 +338,114 @@ float get_fade_factor(float depth)
     return fade * saturate(exp2(-depth * depth)); //overlaying regular exponential fade
 }
 
+//=============================================================================   
+#if _COMPUTE_SUPPORTED
+//=============================================================================  
+
+static uint occlusion_bitfield;
+
+void bitfield_init()
+{
+    occlusion_bitfield = 0xFFFFFFFF;
+}
+
+void process_horizons(float2 h)
+{
+    uint a = uint(h.x * 32);
+    uint b = round(saturate(h.y - h.x) * 32); //ceil? using half occlusion here, this attenuates effect when an occluder is so far away that can't cover half a sector
+    uint occlusion = ((1 << b) - 1) << a;
+    occlusion_bitfield &= ~occlusion; //somehow "and" is faster than "or" based occlusion
+}
+
+float integrate_sectors()
+{
+    return saturate(countbits(occlusion_bitfield) / 32.0);
+}
+
+//read from deinterleave volume
+float read_z(float2 uv, float w)
+{
+    return tex3Dlod(sZSrc3D, float4(uv, w, 0)).x;
+}
+
+bool shading_rate(uint2 tile_idx)
+{
+    bool skip_pixel = false;
+    switch(SHADING_RATE)
+    {
+        case 1: skip_pixel = ((tile_idx.x + tile_idx.y) & 1) ^ (FRAMECOUNT & 1); break;     
+        case 2: skip_pixel = (tile_idx.x & 1 + (tile_idx.y & 1) * 2) ^ (FRAMECOUNT & 3); break; 
+    }
+    return skip_pixel;
+}
+
+//=============================================================================                  
+#else //Needs this because DX9 is a jackass and doesn't have bitwise ops... so emulate them with floats
+//=============================================================================   
+
+bool bitfield_is_set(float bitfield, int bit)
+{
+    float state = floor(bitfield * exp2(-bit)); //>>
+    return frac(state * 0.5) > 0.25; //& 1
+}
+
+void bitfield_set(inout float bitfield, int bit, bool value)
+{
+    bitfield += exp2(bit) * (value - bitfield_is_set(bitfield, bit));    
+}
+
+float bitfield_set_bits(float bitfield, int start, int stride)
+{ 
+    [loop]
+    for(int bit = start; bit < start + stride; bit++)
+        bitfield_set(bitfield, bit, 1);       
+    return bitfield;
+}
+
+static float occlusion_bitfield;
+
+void bitfield_init()
+{
+    occlusion_bitfield = 0;
+}
+
+float integrate_sectors()
+{  
+    float sum = 0;
+    [loop]
+    for(int bit = 0; bit < 24; bit++)
+        sum += bitfield_is_set(occlusion_bitfield, bit);
+    return saturate(1.0 - sum / 25.0);
+}
+                    
+void process_horizons(float2 h)
+{
+    uint a = floor(h.x * 24);
+    uint b = floor(saturate(h.y - h.x) * 25.0); //haven't figured out why this needs to be one more (gives artifacts otherwise) but whatever, somethingsomething float inaccuracy
+    occlusion_bitfield = bitfield_set_bits(occlusion_bitfield, a, b);
+}
+
+//read from tiled texture
+float read_z(float2 uv, float w)
+{
+    return tex2Dlod(sZSrc, uv, 0).x;
+}
+
+bool shading_rate(uint2 tile_idx)
+{
+    bool skip_pixel = false;
+    switch(SHADING_RATE)
+    { 
+        case 1: skip_pixel = ((tile_idx.x + tile_idx.y) % 2) != (FRAMECOUNT % 2); break;     
+        case 2: skip_pixel = (tile_idx.x % 2 + (tile_idx.y % 2) * 2) != (FRAMECOUNT % 4); break;
+    }
+    return skip_pixel;
+}
+
+//=============================================================================   
+#endif //_COMPUTE_SUPPORTED
+//=============================================================================   
+
 /*=============================================================================
 	Shader Entry Points
 =============================================================================*/
@@ -328,7 +458,7 @@ VSOUT MainVS(in uint id : SV_VertexID)
 }
 
 #if _COMPUTE_SUPPORTED
-void DepthInterleaveCS(in CSIN i)
+void Deinterleave3DCS(in CSIN i)
 {
     if(!check_boundaries(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE)) return;
 
@@ -354,8 +484,16 @@ void DepthInterleaveCS(in CSIN i)
     [unroll]
     for(uint j = 0; j < 4; j++)
     {
-        uint2 write_pos = deinterleave_pos(i.dispatchthreadid.xy * 2 + offsets[j], DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE);
-        tex2Dstore(stZSrc, write_pos, depth_texels[j]);
+        uint2 screenpos = i.dispatchthreadid.xy * 2 + offsets[j];
+
+        const uint tilecount = DEINTERLEAVE_TILE_COUNT;
+
+        uint3 write_pos;
+        write_pos.xy = screenpos / tilecount;
+        uint2 tile_idx = screenpos - write_pos.xy * tilecount;
+        write_pos.z = tile_idx.x + tile_idx.y * tilecount;
+
+        tex3Dstore(stZSrc3D, write_pos, depth_texels[j]);
     }
 }
 #else 
@@ -366,47 +504,9 @@ void DepthInterleavePS(in VSOUT i, out float o : SV_Target0)
 }
 #endif
 
-//Needs this because DX9 is a jackass and doesn't have bitwise ops... so emulate them with floats
-bool bitfield_get(float bitfield, int bit)
-{
-    float state = floor(bitfield * exp2(-bit)); //"right shift"
-    return frac(state * 0.5) > 0.25; //"& 1"
-}
-
-void bitfield_set(inout float bitfield, int bit, bool value)
-{
-    bool is_set = bitfield_get(bitfield, bit);
-    bitfield += exp2(bit) * (value - is_set);    
-}
-
-//tried many things like LUTs, or'ing bits 4 at a time and what not, the stupid and straightforward approach is best
-float bitfield_set_bits(float bitfield, int start, int stride/*, out float num_changed*/)
-{ 
-    //num_changed = 0;
-    [loop]
-    for(int bit = start; bit < start + stride; bit++)
-    {
-        bitfield_set(bitfield, bit, 1);
-        //bool is_set = bitfield_get(bitfield, bit);
-        //num_changed += 1.0 - is_set;
-        //bitfield += exp2(bit) * (1.0 - is_set); 
-    }
-       
-    return bitfield;
-}
-
-float bitfield_countones(float bitfield)
-{  
-    float sum = 0;
-    [loop]
-    for(int bit = 0; bit < 24; bit++)
-        sum += bitfield_get(bitfield, bit);
-    return sum;
-}
-
-float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
+float2 MXAOFused(uint2 screenpos, float4 uv, float depth_layer)
 { 	
-    float z = tex2Dlod(sZSrc, uv.xy, 0).x;
+    float z = read_z(uv.xy, depth_layer);
     float d = Camera::z_to_depth(z);
 
     [branch]
@@ -418,13 +518,16 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
     p = p * 0.996;
     float3 v = normalize(-p);  
 
+#if _COMPUTE_SUPPORTED
+    static const float4 texture_scale = BUFFER_ASPECT_RATIO.xyxy;
+#else
     static const float4 texture_scale = float2(1.0 / DEINTERLEAVE_TILE_COUNT, 1.0).xxyy * BUFFER_ASPECT_RATIO.xyxy;
+#endif
 
-    static const uint2 samples_per_preset[7] = {uint2(2, 2), uint2(4, 2), uint2(5, 4), uint2(6, 6), uint2(6, 9), uint2(8, 12), uint2(10, 24)};//8, 16, 40, 72, 90, 192, 480 samples
     uint slice_count  = samples_per_preset[MXAO_GLOBAL_SAMPLE_QUALITY_PRESET].x;    
     uint sample_count = samples_per_preset[MXAO_GLOBAL_SAMPLE_QUALITY_PRESET].y; 
 
-    float jitter = get_jitter(write_pos);    
+    float jitter = get_jitter(screenpos);    
     float3 slice_dir = 0; sincos(jitter * PI * (6.0/slice_count), slice_dir.x, slice_dir.y);    
     float2x2 rotslice; sincos(PI / slice_count, rotslice._21, rotslice._11); rotslice._12 = -rotslice._21; rotslice._22 = rotslice._11;    
 
@@ -440,7 +543,8 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
 
     float visibility = 0;
     float slicesum = 0;  
-    float T = 0.25 * worldspace_radius;  //arbitrary thickness that looks good relative to sample radius  
+    float T = log(1 + worldspace_radius) * 0.3333;//arbitrary thickness that looks good relative to sample radius  
+
     float falloff_factor = rcp(worldspace_radius);
     falloff_factor *= falloff_factor;
 
@@ -461,11 +565,7 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
         float normal_angle = Math::fast_acos(cosn) * Math::fast_sign(dot(ortho_dir, n_proj_on_slice));
         
         float2 maxhorizoncos = sin(normal_angle); maxhorizoncos.y = -maxhorizoncos.y; //cos(normal_angle -+ pi/2)  
-#if _COMPUTE_SUPPORTED
-        uint occlusion_bitfield = 0xFFFFFFFF;   
-#else       
-        float occlusion_bitfield = 0;
-#endif
+        bitfield_init();
 
         [unroll]
         for(int side = 0; side < 2; side++)
@@ -477,13 +577,15 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
             for(int _sample = 0; _sample < sample_count; _sample += 2)
             {
                 float2 s = (_sample + float2(0, 1) + jitter) / sample_count; s *= s;  
-                float4 tap_uv[2] = {uv + s.x * scaled_dir, uv + s.y * scaled_dir};
+
+                float4 tap_uv[2] = {uv + s.x * scaled_dir, 
+                                    uv + s.y * scaled_dir};
+
+                if(!all(saturate(tap_uv[1].zw - tap_uv[1].zw * tap_uv[1].zw))) break;                       
 
                 float2 zz; //https://developer.nvidia.com/blog/the-peak-performance-analysis-method-for-optimizing-any-gpu-workload/
-                zz.x = tex2Dlod(sZSrc, tap_uv[0].xy, 0).x;  
-                zz.y = tex2Dlod(sZSrc, tap_uv[1].xy, 0).x; 
-
-                if(!all(saturate(tap_uv[1].zw - tap_uv[1].zw * tap_uv[1].zw))) break;
+                zz.x = read_z(tap_uv[0].xy, depth_layer); 
+                zz.y = read_z(tap_uv[1].xy, depth_layer);               
 
                 [unroll] //less VGPR by splitting
                 for(uint pair = 0; pair < 2; pair++)
@@ -498,7 +600,6 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
 #else      
                     float ddotv = dot(deltavec, v);
                     float ddotd = dot(deltavec, deltavec);
-
                     float2 h_frontback = float2(ddotv, ddotv - T) * rsqrt(float2(ddotd, ddotd - 2 * T * ddotv + T * T));
 
                     h_frontback = Math::fast_acos(h_frontback);
@@ -507,18 +608,8 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
 #if MXAO_AO_TYPE == 2
                     //this almost perfectly approximates inverse transform sampling for cosine lobe
                     h_frontback = h_frontback * h_frontback * (3.0 - 2.0 * h_frontback); 
-#endif
-                   
-#if _COMPUTE_SUPPORTED
-                    uint a = uint(h_frontback.x * 32);
-                    uint b = round(saturate(h_frontback.y - h_frontback.x) * 32); //ceil? using half occlusion here
-                    uint occlusion = ((1 << b) - 1) << a;
-                    occlusion_bitfield &= ~occlusion; //somehow "and" is faster than "or" based occlusion
-#else                
-                    uint a = floor(h_frontback.x * 24);
-                    uint b = floor(saturate(h_frontback.y - h_frontback.x) * 25.0); //haven't figured out why this needs to be one more (gives artifacts otherwise) but whatever, somethingsomething float inaccuracy
-                    occlusion_bitfield = bitfield_set_bits(occlusion_bitfield, a, b);
-#endif //_COMPUTE_SUPPORTED
+#endif                   
+                    process_horizons(h_frontback);
 #endif  //MXAO_AO_TYPE        
                 }              
             }
@@ -534,13 +625,8 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
         visibility += dot(max_horizon_angle, sliceweight);
         slicesum += sliceweight;
 #else
-
-#if _COMPUTE_SUPPORTED
-        visibility += saturate(countbits(occlusion_bitfield) / 32.0) * sliceweight;
-#else 
-        visibility += saturate(1.0 - bitfield_countones(occlusion_bitfield) / 24.0) * sliceweight;
-#endif
-        slicesum += sliceweight;           
+        visibility += integrate_sectors() * sliceweight;
+        slicesum += sliceweight;         
 #endif
     }
 
@@ -554,41 +640,27 @@ float2 MXAO(in float4 uv, in uint2 tile_idx, in uint2 write_pos)
     return float2(saturate(visibility), edge_weight > 0.5 ? -d : d);//store depth negated for pixels with low normal confidence to drive the filter
 }
 
-bool shading_rate(uint2 tile_idx)
-{
-    bool skip_pixel = false;
-    switch(SHADING_RATE)
-    {
-#if _COMPUTE_SUPPORTED //bitwise :yeahboiii:
-        case 1: skip_pixel = ((tile_idx.x + tile_idx.y) & 1) ^ (FRAMECOUNT & 1); break;     
-        case 2: skip_pixel = (tile_idx.x & 1 + (tile_idx.y & 1) * 2) ^ (FRAMECOUNT & 3); break; 
-#else 
-        case 1: skip_pixel = ((tile_idx.x + tile_idx.y) % 2) != (FRAMECOUNT % 2); break;     
-        case 2: skip_pixel = (tile_idx.x % 2 + (tile_idx.y % 2) * 2) != (FRAMECOUNT % 4); break; 
-#endif
-    }
-    return skip_pixel;
-}
-
 #if _COMPUTE_SUPPORTED
-void OcclusionWrapCS(in CSIN i)
-{
-    //need to round up here, otherwise resolutions not divisible by interleave tile amount will cause trouble,
-    //as even thread groups that hang over the texture boundaries have draw areas inside. However we cannot allow all
-    //of them to attempt to work - I'm not sure why.
-    if(!check_boundaries(i.dispatchthreadid.xy, CEIL_DIV(BUFFER_SCREEN_SIZE, DEINTERLEAVE_TILE_COUNT) * DEINTERLEAVE_TILE_COUNT)) return; 
+void OcclusionWrap3DCS(in CSIN i)
+{    
+    const uint tilecount = DEINTERLEAVE_TILE_COUNT;
+    const uint2 tilesize = BUFFER_SCREEN_SIZE / tilecount;    
 
-    uint2 write_pos = reinterleave_pos(i.dispatchthreadid.xy, DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE);
-    uint2 tile_idx = i.dispatchthreadid.xy / CEIL_DIV(BUFFER_SCREEN_SIZE, DEINTERLEAVE_TILE_COUNT);
+    uint2 tile_idx;
+    tile_idx.y = i.dispatchthreadid.z / tilecount;
+    tile_idx.x = i.dispatchthreadid.z - tile_idx.y * tilecount; 
 
-    if(shading_rate(tile_idx)) return;
-   
+    if(!check_boundaries(i.dispatchthreadid.xy, tilesize) || shading_rate(tile_idx)) return;
+
+    uint2 screen_pos = i.dispatchthreadid.xy * tilecount + tile_idx;
     float4 uv;
-    uv.xy = pixel_idx_to_uv(i.dispatchthreadid.xy, BUFFER_SCREEN_SIZE);
-    uv.zw = pixel_idx_to_uv(write_pos, BUFFER_SCREEN_SIZE);
+    uv.xy = pixel_idx_to_uv(i.dispatchthreadid.xy, tilesize);
+    uv.zw = pixel_idx_to_uv(screen_pos, BUFFER_SCREEN_SIZE);    
 
-    float2 ao_and_guide = MXAO(uv, tile_idx, write_pos);
-    tex2Dstore(stAOTex1, write_pos, ao_and_guide.xyyy);
+    float depth_layer = i.dispatchthreadid.z * rcp(tilecount * tilecount);    
+    float2 ao_and_guide = MXAOFused(screen_pos, uv, depth_layer);
+
+    tex2Dstore(stAOTex1, screen_pos, ao_and_guide.xyyy);
 }
 #else 
 void OcclusionWrap1PS(in VSOUT i, out float2 o : SV_Target0) //writes to AOTex2
@@ -598,13 +670,12 @@ void OcclusionWrap1PS(in VSOUT i, out float2 o : SV_Target0) //writes to AOTex2
     uint2 tile_idx = dispatchthreadid / CEIL_DIV(BUFFER_SCREEN_SIZE, DEINTERLEAVE_TILE_COUNT);
 
     if(shading_rate(tile_idx)) discard;   
-   
 
     float4 uv;
     uv.xy = pixel_idx_to_uv(dispatchthreadid, BUFFER_SCREEN_SIZE);
     //uv.zw = pixel_idx_to_uv(write_pos, BUFFER_SCREEN_SIZE);
     uv.zw = deinterleave_uv(uv.xy); //no idea why _this_ works but the other doesn't but that's just DX9 being a jackass I guess
-    o = MXAO(uv, tile_idx, write_pos);
+    o = MXAOFused(write_pos, uv, 0.0);
 }
 
 void OcclusionWrap2PS(in VSOUT i, out float2 o : SV_Target0) 
@@ -660,7 +731,7 @@ float2 filter(float2 uv, sampler sAO, int iter)
     float4 ao, depth, mv;
     ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(-0.5, -0.5));
     depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(-0.5, -0.5))); //abs because sign flip for edge pixels!
-    mv += float4(dot(depth, 1), dot(depth, depth), dot(ao, 1), dot(ao, depth));
+    mv = float4(dot(depth, 1), dot(depth, depth), dot(ao, 1), dot(ao, depth));
 
     ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(1.5, -0.5));
     depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(1.5, -0.5)));
@@ -736,19 +807,20 @@ technique MartysMods_MXAO
         "\n"       
         "______________________________________________________________________________";
 >
-{
+{ 
 #if _COMPUTE_SUPPORTED
     pass 
     { 
-        ComputeShader = DepthInterleaveCS<32, 32>;
+        ComputeShader = Deinterleave3DCS<32, 32>;
         DispatchSizeX = CEIL_DIV(BUFFER_WIDTH, 64); 
         DispatchSizeY = CEIL_DIV(BUFFER_HEIGHT, 64);
     }
     pass 
     { 
-        ComputeShader = OcclusionWrapCS<16, 16>;
-        DispatchSizeX = CEIL_DIV(BUFFER_WIDTH, 16); 
-        DispatchSizeY = CEIL_DIV(BUFFER_HEIGHT, 16);
+        ComputeShader = OcclusionWrap3DCS<16, 16, 1>;
+        DispatchSizeX = CEIL_DIV((BUFFER_WIDTH/DEINTERLEAVE_TILE_COUNT), 16); 
+        DispatchSizeY = CEIL_DIV((BUFFER_HEIGHT/DEINTERLEAVE_TILE_COUNT), 16);
+        DispatchSizeZ = DEINTERLEAVE_TILE_COUNT * DEINTERLEAVE_TILE_COUNT;
     }
 #else 
     pass { VertexShader = MainVS; PixelShader = DepthInterleavePS; RenderTarget = ZSrc; }
