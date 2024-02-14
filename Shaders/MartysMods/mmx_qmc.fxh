@@ -81,4 +81,33 @@ float2 get_stratified_sample(float2 per_sample_rand, float3 stratificator, int i
     return stratified_sample;
 }
 
+float2 uniform_sample_disc(float2 u)
+{
+    float2 dir;
+    sincos(u.x * TAU, dir.y, dir.x);        
+    dir *= sqrt(u.y);
+    return dir;
+}
+
+float3 uniform_sample_sphere(float2 u)
+{
+    float3 dir;
+    sincos(u.x * TAU, dir.y, dir.x);        
+    dir.z = u.y * 2.0 - 1.0; 
+    dir.xy *= sqrt(1.0 - dir.z * dir.z);
+    return dir;
+}
+
+float3 ray_cosine(float2 u, float3 n)
+{
+    return normalize(uniform_sample_sphere(u) + n);
+}
+
+float3 ray_uniform(float2 u, float3 n)
+{
+    float3 dir = uniform_sample_sphere(u);
+    dir = dot(dir, n) < 0 ? -dir : dir;
+    return normalize(dir + n * 0.01);
+}
+
 } //namespace

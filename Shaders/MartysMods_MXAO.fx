@@ -351,7 +351,7 @@ void bitfield_init()
 void process_horizons(float2 h)
 {
     uint a = uint(h.x * 32);
-    uint b = round(saturate(h.y - h.x) * 32); //ceil? using half occlusion here, this attenuates effect when an occluder is so far away that can't cover half a sector
+    uint b = ceil(saturate(h.y - h.x) * 32); //ceil? using half occlusion here, this attenuates effect when an occluder is so far away that can't cover half a sector
     uint occlusion = ((1 << b) - 1) << a;
     occlusion_bitfield &= ~occlusion; //somehow "and" is faster than "or" based occlusion
 }

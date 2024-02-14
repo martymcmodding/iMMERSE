@@ -46,31 +46,29 @@ float4 sample_volume_trilinear(sampler s, float3 uvw, int3 size, int atlas_idx)
 //tetrahedral volume interpolation
 //also DX9 safe - emulated integers suck...
 float4 sample_volume_tetrahedral(sampler s, float3 uvw, int3 size, int atlas_idx)
-{    
-    float3 p = saturate(uvw) * (size - 1);   //p += float3(1.0/4096.0, 0, 1.0/2048.0); 
+{
+    float3 p = saturate(uvw) * (size - 1);
     float3 c000 = floor(p); float3 c111 = ceil(p);
-    float3 delta = p - c000;
-    
-    //work out the axes with most/least delta (min axis goes backwards from 111)
-    float3 comp = delta.xyz > delta.yzx; 
-    float3 minaxis = comp.zxy * (1.0 - comp);
-    float3 maxaxis = comp * (1.0 - comp.zxy);   
-    
-    float maxv = dot(maxaxis, delta);
-    float minv = dot(minaxis, delta);
-    float medv = dot(1 - maxaxis - minaxis, delta);
+    float3 f = p - c000;
 
-    float4 w = float4(1, maxv, medv, minv);
-    w.xyz -= w.yzw;
+    float maxv = max(max(f.x, f.y), f.z);
+    float minv = min(min(f.x, f.y), f.z);
+    float medv = dot(f, 1) - maxv - minv;
 
-    //3D coords of the 2 dynamic interpolants in the lattice    
+    float3 minaxis = minv == f.x ? float3(1,0,0) : (minv == f.y ? float3(0,1,0) : float3(0,0,1));
+    float3 maxaxis = maxv == f.x ? float3(1,0,0) : (maxv == f.y ? float3(0,1,0) : float3(0,0,1));
+             
     int3 cmin = lerp(c111, c000, minaxis);
     int3 cmax = lerp(c000, c111, maxaxis);
 
-    return  tex2Dfetch(s, int2(c000.x + c000.z * size.x, c000.y + size.y * atlas_idx)) * w.x      
-          + tex2Dfetch(s, int2(cmax.x + cmax.z * size.x, cmax.y + size.y * atlas_idx)) * w.y
-          + tex2Dfetch(s, int2(cmin.x + cmin.z * size.x, cmin.y + size.y * atlas_idx)) * w.z
-          + tex2Dfetch(s, int2(c111.x + c111.z * size.x, c111.y + size.y * atlas_idx)) * w.w;
+    //3D barycentric
+    float4 w = float4(1, maxv, medv, minv);
+    w.xyz -= w.yzw;
+
+    return  tex2Dfetch(s, int2(c000.x + c000.z * size.x, c000.y + size.y * atlas_idx)) * w.x     //000       
+          + tex2Dfetch(s, int2(cmax.x + cmax.z * size.x, cmax.y + size.y * atlas_idx)) * w.y     //max
+          + tex2Dfetch(s, int2(cmin.x + cmin.z * size.x, cmin.y + size.y * atlas_idx)) * w.z     //min
+          + tex2Dfetch(s, int2(c111.x + c111.z * size.x, c111.y + size.y * atlas_idx)) * w.w;    //111
 }
 
 float4 tex3D(sampler s, float3 uvw, int3 size)

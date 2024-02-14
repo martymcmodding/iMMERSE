@@ -55,13 +55,6 @@ uniform int OPTICAL_FLOW_RES <
     ui_category = "OPTICAL FLOW";
 > = 0;
 
-uniform bool MOIRE_SUPPRESSION <	
-	ui_label = "Moire Suppression";
-	ui_tooltip = "Block Matching can have issues with high frequency patterns, this helps to reduce them.\n"
-				 "If you see strange movement in effects when rotating the camera, try enabling this.";				 
-	ui_category = "OPTICAL FLOW";
-> = false;
-
 uniform bool ENABLE_SMOOTH_NORMALS <	
 	ui_label = "Enable Smooth Normals";
 	ui_tooltip = "Filters the normal buffer to reduce low-poly look in MXAO and RTGI."
@@ -110,7 +103,7 @@ uniform int TEXTURED_NORMALS_QUALITY <
 #if LAUNCHPAD_DEBUG_OUTPUT != 0
 uniform int DEBUG_MODE < 
     ui_type = "combo";
-	ui_items = "All\0Optical Flow\0Normals\0Depth\0";
+	ui_items = "All\0Optical Flow\0Optical Flow Vectors\0Normals\0Depth\0";
 	ui_label = "Debug Output";
 > = 0;
 #endif
@@ -230,9 +223,30 @@ struct CSIN
     uint threadid           : SV_GroupIndex;            //flattened idx of thread inside group
 };
 
+
+//                                            o                              
+//                                                                      
+//             o        o   o   o         o   o   o                     
+//   o         o            o                 o                         
+// o x o   o o x o o    o o x o o     o   o o x o o   o                             
+//   o         o            o                 o                         
+//             o        o   o   o         o   o   o                     
+//                                                                      
+//                                            o                         
+
+static const float2 block_kernel[17] = 
+{
+	float2(0,  0), float2( 0, -1), float2( 0,  1), float2(-1,  0),	
+	float2(1,  0), float2( 0, -2), float2( 0,  2), float2(-2,  0),	
+	float2(2,  0), float2(-2, -2), float2( 2,  2), float2(-2,  2),	
+	float2(2, -2), float2( 0, -4), float2( 0,  4), float2(-4,  0),	
+	float2(4,  0)
+};
+
 /*=============================================================================
 	Functions
 =============================================================================*/
+
 
 float get_curr_feature(float2 uv, int mip)
 {
@@ -307,35 +321,13 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 
 	float2 total_motion = coarse_layer.xy;
 
-	//                                            o                              
-	//                                                                      
-	//             o        o   o   o         o   o   o                     
-	//   o         o            o                 o                         
-	// o x o   o o x o o    o o x o o     o   o o x o o   o                             
-	//   o         o            o                 o                         
-	//             o        o   o   o         o   o   o                     
-	//                                                                      
-	//                                            o                         
-
 	float2 search_scale = texelsize;
- 
-	static const float2 block_kernel[17] = 
-	{
-		float2(0,  0), float2( 0, -1), float2( 0,  1), float2(-1,  0),	
-		float2(1,  0), float2( 0, -2), float2( 0,  2), float2(-2,  0),	
-		float2(2,  0), float2(-2, -2), float2( 2,  2), float2(-2,  2),	
-		float2(2, -2), float2( 0, -4), float2( 0,  4), float2(-4,  0),	
-		float2(4,  0)
-	};
-
 	float local_block[17];
 
 	float m_xy = 0;
 	float2 m_x_xx = 0;
 	float2 m_y_yy = 0;
-
-	float2 grad = 0;
-
+	float best_rmse = 0;
 	
 	[unroll] //array index not natively addressable bla...
 	for(uint k = 0; k < blocksize; k++)
@@ -350,7 +342,7 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 		m_x_xx += float2(t_local, t_local * t_local);
 		m_y_yy += float2(t_search, t_search * t_search);
 
-		grad += block_kernel[k] * t_local;
+		best_rmse += (t_local - t_search) * (t_local - t_search);
 	}
 
 	const float normfact = 1.0 / blocksize;
@@ -393,14 +385,19 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 			
 			m_xy = 0;
 			m_y_yy = 0;
+
+			float rmse = 0;
 		
-			[unroll]
+			[loop]
 			for(uint k = 0; k < blocksize; k++)
 			{
 				float t = get_prev_feature(search_center + block_kernel[k] * search_scale, level);
 
 				m_xy += local_block[k] * t;
 				m_y_yy += float2(t, t * t);
+
+				rmse += (local_block[k] - t) * (local_block[k] - t);
+				if(rmse >= best_rmse) break; //makes this go faaaaaast
 			}
 
 			m_y_yy *= normfact;
@@ -411,7 +408,8 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 
 			float corr = cov_xy * inv_sigma_x * inv_sigma_y;
 
-			if(corr <= best_corr) continue;			
+			if(corr <= best_corr || rmse >= best_rmse) continue;
+			best_rmse = rmse;		
 			best_corr = corr;
 			local_motion = search_offset;
 							
@@ -423,31 +421,24 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 	if(do_refine) total_motion += estimate_subpixel(i, level, total_motion, search_scale);
 
 	float prev_depth_at_motion = tex2Dlod(sDepthLowresPrev, i.uv + total_motion, 0).x;	
-	float4 curr_layer = float4(total_motion, prev_depth_at_motion, saturate(best_corr * 0.5 + 0.5));
-	curr_layer.w = 1.0 - sqrt(curr_layer.w);
-
-	if(MOIRE_SUPPRESSION)
-	{		 
-		float orthogonality = dot(total_motion * BUFFER_SCREEN_SIZE, float2(grad.y, -grad.x));
-		best_corr = saturate(best_corr * 0.5 + 0.5);
-		curr_layer.w = abs(orthogonality) * 3.0 * (level >= 1);
-		curr_layer.w -= best_corr * 3.0;
-	}
-
-
+	float4 curr_layer = float4(total_motion, prev_depth_at_motion, best_rmse * normfact * 256);
 	return curr_layer;
 }
 
 float4 pool_vectors(VSOUT i, int level, sampler motion_tex, int pass_id, float r)
 {	
 	float center_z = tex2Dlod(sDepthLowres, i.uv, 0).x;
-	 if(level == 0) center_z = Depth::get_linear_depth(i.uv);
+	if(level == 0) center_z = Depth::get_linear_depth(i.uv);
 
 	float3 jitter = get_jitter_blue(i.vpos.xy);
 	float wsum = 0.001;
 	float4 finalsum = 0;
 
-	float2 kernel_scale = rcp(tex2Dsize(motion_tex)) * r;
+	float2 texelsize = rcp(tex2Dsize(motion_tex));
+	float2 kernel_scale = texelsize * r;
+
+	float4 reservoir = 0;
+	float reservoir_w = 0;
 
 	[loop]for(int x = -2; x <= 1; x++)
 	[loop]for(int y = -2; y <= 1; y++)
@@ -458,7 +449,6 @@ float4 pool_vectors(VSOUT i, int level, sampler motion_tex, int pass_id, float r
 		if(!Math::inside_screen(sample_uv)) continue;
 
 		float4 flow = tex2Dlod(motion_tex, sample_uv, 0);
-
 		float w = 0;		
 
 		float ws = flow.w;
@@ -474,13 +464,46 @@ float4 pool_vectors(VSOUT i, int level, sampler motion_tex, int pass_id, float r
 		wz = abs(center_z - flow.z) / max3(1e-5, center_z, flow.z);	
 		w += wz * wz * 36.0;
 
+		float copy_w = w;
+
 		w = exp2(-w) + 0.001; 
 		finalsum += flow * w;
-		wsum += w;	
+		wsum += w;
 
+		float rand = QMC::roberts1((x+2) * 4 + (y+2), jitter.x);
+		w = exp2(-copy_w);
+		
+		w = w * 128;
+		w *=w;
+
+		reservoir_w += w;
+		if(rand * reservoir_w <= w || reservoir_w == 0)
+		{
+			reservoir = flow;
+		}
 	}
 	
 	finalsum /= wsum;
+
+	if(pass_id < 10)
+	{		
+		float rmse_avg = 0;
+		float rmse_res = 0;		
+
+		[loop]
+		for(uint k = 0; k < 9; k++)
+		{
+			float c = get_curr_feature(i.uv + block_kernel[k] * texelsize, level - 1);
+			float p_avg = get_prev_feature(i.uv + finalsum.xy + block_kernel[k] * texelsize, level - 1);
+			float p_res = get_prev_feature(i.uv + reservoir.xy + block_kernel[k] * texelsize, level - 1);			
+
+			rmse_avg += (c - p_avg) * (c - p_avg);
+			rmse_res += (c - p_res) * (c - p_res);
+		}
+
+		finalsum = rmse_res < rmse_avg ? reservoir : finalsum; 
+	}
+
 	return finalsum;
 }
 
@@ -547,7 +570,7 @@ void WriteFeaturePS(in VSOUT i, out float4 o : SV_Target0)
 	feature_data.rgb = tex2D(ColorInput, i.uv).rgb;
 #endif	
 
-	o = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
+	o = dot(0.3333, feature_data.rgb);
 	//if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x + 1) discard;
 }
 
@@ -576,7 +599,7 @@ void WriteFeaturePS2(in VSOUT i, out float4 o : SV_Target0)
 #endif	
 	feature_data.w = Depth::get_linear_depth(i.uv);	
 
-	o = dot(float3(0.299, 0.587, 0.114), feature_data.rgb);
+	o = dot(0.3333, feature_data.rgb);
 	//if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x) discard;
 }
 
@@ -944,8 +967,30 @@ void DebugPS(in VSOUT i, out float3 o : SV_Target0)
 			break;			
 		}
 		case 1: o = showmotion(Deferred::get_motion(i.uv)); break;
-		case 2: o = Deferred::get_normals(i.uv) * 0.5 + 0.5; break;
-		case 3: o = gradient(Depth::get_linear_depth(i.uv)); break;
+		case 2:
+		{
+			float2 tile_size = 16.0;
+			float2 tile_uv = i.uv * BUFFER_SCREEN_SIZE / tile_size;
+			float2 motion = Deferred::get_motion((floor(tile_uv) + 0.5) * tile_size * BUFFER_PIXEL_SIZE);
+
+			float3 chroma = showmotion(motion);
+			
+			motion *= BUFFER_SCREEN_SIZE;
+			float velocity = length(motion);
+			float2 mainaxis = velocity == 0 ? 0 : motion / velocity;
+			float2 otheraxis = float2(mainaxis.y, -mainaxis.x);
+			float2x2 rotation = float2x2(mainaxis, otheraxis);
+
+			tile_uv = (frac(tile_uv) - 0.5) * tile_size;
+			tile_uv = mul(tile_uv, rotation);
+			o = tex2Dlod(ColorInput, i.uv, 0).rgb;
+			float mask = smoothstep(min(velocity, 2.5), min(velocity, 2.5) - 1, abs(tile_uv.y)) * smoothstep(velocity, velocity - 1.0, abs(tile_uv.x));
+
+			o = lerp(o, chroma, mask);
+			break;
+		}
+		case 3: o = Deferred::get_normals(i.uv) * 0.5 + 0.5; break;
+		case 4: o = gradient(Depth::get_linear_depth(i.uv)); break;
 	}	
 }
 #endif
