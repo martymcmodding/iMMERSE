@@ -234,7 +234,7 @@ struct CSIN
 //                                                                      
 //                                            o                         
 
-static const float2 block_kernel[17] = 
+static float2 block_kernel[17] = 
 {
 	float2(0,  0), float2( 0, -1), float2( 0,  1), float2(-1,  0),	
 	float2(1,  0), float2( 0, -2), float2( 0,  2), float2(-2,  0),	
