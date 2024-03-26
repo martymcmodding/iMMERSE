@@ -234,13 +234,14 @@ struct CSIN
 //                                                                      
 //                                            o                         
 
-static float2 block_kernel[17] = 
+static float2 block_kernel[13] = 
 {
 	float2(0,  0), float2( 0, -1), float2( 0,  1), float2(-1,  0),	
 	float2(1,  0), float2( 0, -2), float2( 0,  2), float2(-2,  0),	
 	float2(2,  0), float2(-2, -2), float2( 2,  2), float2(-2,  2),	
-	float2(2, -2), float2( 0, -4), float2( 0,  4), float2(-4,  0),	
-	float2(4,  0)
+	float2(2, -2) 
+	//float2( 0, -4), float2( 0,  4), float2(-4,  0),	
+	//float2(4,  0)
 };
 
 /*=============================================================================
@@ -322,7 +323,7 @@ float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksi
 	float2 total_motion = coarse_layer.xy;
 
 	float2 search_scale = texelsize;
-	float local_block[17];
+	float local_block[13];
 
 	float m_xy = 0;
 	float2 m_x_xx = 0;
@@ -603,15 +604,15 @@ void WriteFeaturePS2(in VSOUT i, out float4 o : SV_Target0)
 	//if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x) discard;
 }
 
-void BlockMatchingPassPS6(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 6, 0.0.xxxx,        									  17, TAYLOR_EXPANSION);}
+void BlockMatchingPassPS6(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 6, 0.0.xxxx,        									  13, TAYLOR_EXPANSION);}
 void FilterPass6(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 0, POOL_RADIUS);}
-void BlockMatchingPassPS5(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 5, pool_vectors(i, 3, sMotionTexNewB, 1, POOL_RADIUS), 17, TAYLOR_EXPANSION);}
+void BlockMatchingPassPS5(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 5, pool_vectors(i, 3, sMotionTexNewB, 1, POOL_RADIUS), 13, TAYLOR_EXPANSION);}
 void FilterPass5(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 2, POOL_RADIUS);}
-void BlockMatchingPassPS4(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 4, pool_vectors(i, 3, sMotionTexNewB, 3, POOL_RADIUS), 17, TAYLOR_EXPANSION);}
+void BlockMatchingPassPS4(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 4, pool_vectors(i, 3, sMotionTexNewB, 3, POOL_RADIUS), 13, TAYLOR_EXPANSION);}
 void FilterPass4(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 4, POOL_RADIUS);}
-void BlockMatchingPassPS3(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 3, pool_vectors(i, 3, sMotionTexNewB, 5, POOL_RADIUS), 17, TAYLOR_EXPANSION);}
+void BlockMatchingPassPS3(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 3, pool_vectors(i, 3, sMotionTexNewB, 5, POOL_RADIUS), 13, TAYLOR_EXPANSION);}
 void FilterPass3(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 6, POOL_RADIUS);}
-void BlockMatchingPassPS2(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 2, pool_vectors(i, 3, sMotionTexNewB, 7, POOL_RADIUS), 17, TAYLOR_EXPANSION);}
+void BlockMatchingPassPS2(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 2, pool_vectors(i, 3, sMotionTexNewB, 7, POOL_RADIUS), 13, TAYLOR_EXPANSION);}
 void FilterPass2(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 8, POOL_RADIUS);}
 void BlockMatchingPassPS1(in VSOUT i, out float4 o : SV_Target0)
 {
