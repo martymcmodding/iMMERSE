@@ -157,7 +157,7 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
 #if FFT_CHANNELS == 4
     float2 local2[FFT_RADIX];    
 #endif
-    [unroll]
+    [loop]
     for(uint j = 0; j < FFT_RADIX; j++)
     {
 #if FFT_AXIS == 0
@@ -173,7 +173,7 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
     }
 
     uint k = 0;
-    [unroll]
+    [loop]
     for(uint n = 1; n < group_size;)
     {
         //fft on local array
@@ -184,14 +184,14 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
         //transpose with shared mem and fetch next batch
         uint curr_lane = k + (threadid - k) * FFT_RADIX;
 
-        [unroll]for(uint j = 0; j < FFT_RADIX; j++) tgsm[curr_lane + j * n] = local[j];
+        [loop]for(uint j = 0; j < FFT_RADIX; j++) tgsm[curr_lane + j * n] = local[j];
         barrier();
-        [unroll]for(uint j = 0; j < FFT_RADIX; j++) local[j] = tgsm[threadid + j * group_size];
+        [loop]for(uint j = 0; j < FFT_RADIX; j++) local[j] = tgsm[threadid + j * group_size];
         barrier();
 #if FFT_CHANNELS == 4 
-        [unroll]for(uint j = 0; j < FFT_RADIX; j++) tgsm[curr_lane + j * n] = local2[j];
+        [loop]for(uint j = 0; j < FFT_RADIX; j++) tgsm[curr_lane + j * n] = local2[j];
         barrier();
-        [unroll]for(uint j = 0; j < FFT_RADIX; j++) local2[j] = tgsm[threadid + j * group_size];
+        [loop]for(uint j = 0; j < FFT_RADIX; j++) local2[j] = tgsm[threadid + j * group_size];
         barrier();  
 #endif
 
@@ -203,7 +203,7 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
         tw = forward ? tw : complex_conj(tw); 
         float2 tw_curr = tw;       
         
-        [unroll]for(uint j = 1; j < FFT_RADIX; j++)
+        [loop]for(uint j = 1; j < FFT_RADIX; j++)
         {
             local[j] = complex_mul(tw_curr, local[j]);
 #if FFT_CHANNELS == 4 
@@ -218,7 +218,7 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
 #if FFT_CHANNELS == 4 
     fft_radix(forward, local2);
 #endif
-    [unroll]for(uint j = 0; j < FFT_RADIX; j++)
+    [loop]for(uint j = 0; j < FFT_RADIX; j++)
     {
 #if FFT_CHANNELS == 4 
         float4 result = float4(local[j], local2[j]);
