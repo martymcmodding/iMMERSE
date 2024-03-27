@@ -1041,7 +1041,7 @@ technique MartysMods_AntiAliasing_Prepass
 
 technique MartysMods_AntiAliasing
 <
-    ui_label = "iMMERSE Anti Aliasing";
+    ui_label = "iMMERSE: Anti Aliasing";
     ui_tooltip =        
         "                               MartysMods - SMAA                              \n"
          "                   MartysMods Epic ReShade Effects (iMMERSE)                 \n"

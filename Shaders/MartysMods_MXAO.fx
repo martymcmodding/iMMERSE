@@ -794,7 +794,7 @@ void Filter2PS(in VSOUT i, out float3 o : SV_Target0)
 
 technique MartysMods_MXAO
 <
-    ui_label = "iMMERSE MXAO";
+    ui_label = "iMMERSE: MXAO";
     ui_tooltip =        
         "                              MartysMods - MXAO                               \n"
         "                   MartysMods Epic ReShade Effects (iMMERSE)                  \n"

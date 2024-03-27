@@ -207,7 +207,7 @@ void MainPS(in VSOUT i, out float3 o : SV_Target0)
 
 technique MartyMods_Sharpen
 <
-    ui_label = "iMMERSE Sharpen";
+    ui_label = "iMMERSE: Sharpen";
     ui_tooltip =        
         "                             MartysMods - Sharpen                             \n"
         "                   MartysMods Epic ReShade Effects (iMMERSE)                  \n"

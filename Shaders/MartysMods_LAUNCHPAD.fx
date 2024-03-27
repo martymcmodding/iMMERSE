@@ -1002,7 +1002,7 @@ void DebugPS(in VSOUT i, out float3 o : SV_Target0)
 
 technique MartysMods_Launchpad
 <
-    ui_label = "iMMERSE Launchpad (enable and move to the top!)";
+    ui_label = "iMMERSE: Launchpad (enable and move to the top!)";
     ui_tooltip =        
         "                           MartysMods - Launchpad                             \n"
         "                   MartysMods Epic ReShade Effects (iMMERSE)                  \n"
