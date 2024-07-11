@@ -81,17 +81,26 @@ float2 rotate_2D(float2 v, float4 r)
     return float2(dot(v, r.xy), dot(v, r.zw));
 }
 
-//this somewhat strange formulation actually results in far fewer instructions than baseline
+float3x3 get_rotation_matrix(float3 axis, float angle)
+{
+    //http://www.songho.ca/opengl/gl_rotate.html
+    float s, c; sincos(angle, s, c);
+    float3x3 m = float3x3((1 - c) * axis.xxx * axis.xyz + float3(c, -s * axis.z, s * axis.y),
+                          (1 - c) * axis.xyy * axis.yyz + float3(s * axis.z, c, -s * axis.x),
+                          (1 - c) * axis.xyz * axis.zzz + float3(-s * axis.y, s * axis.x, c));
+    return m;
+}
+
 float3x3 base_from_vector(float3 n)
 {
-    bool bestside = n.z < n.y;
-    float3 n2 = bestside ? n.xzy : n;
-    float3 k = (-n2.xxy * n2.xyy) * rcp(1.0 + n2.z) + float3(1, 0, 1);
-    float3 u = float3(k.xy, -n2.x);
-    float3 v = float3(k.yz, -n2.y);
-    u = bestside ? u.xzy : u;
-    v = bestside ? v.xzy : v;
-    return float3x3(u, v, n);
+    //pixar's method, optimized for ALU
+    float2 nz = -n.xy / (1.0 + abs(n.z));//add_abs, rcp, mul
+    float3 t = float3(1.0 + n.x*nz.x, n.x*nz.y, -n.x);//mad, mul, mov              
+	float3 b = float3(1.0 + n.y*nz.y, n.x*nz.y, -n.y);//mad, mul, mov  
+    //moving the crossover boundary back such that it doesn't flipflop on flat surfaces                
+    t.z  = n.z >= 0.5 ? t.z : -t.z;//cmov
+    b.xy = n.z >= 0.5 ? b.yx : -b.yx;//cmov
+    return float3x3(t, b, n); 
 }
 
 float3 aabb_clip(float3 p, float3 mincorner, float3 maxcorner)
@@ -189,7 +198,26 @@ float4x4 invert(float4x4 m)
     return adj * rcp(det + (abs(det) < 1e-8));
 }
 
-#define chebyshev_weight(_mean, _variance, _sample) saturate((_variance) * rcp((_variance) + ((_sample) - (_mean)) * ((_sample) - (_mean))))
+float2 anisotropy_map(float2 kernel, float3 n, float limit)
+{    
+    n.xy *= limit;
+    float2 distorted = kernel - n.xy * dot(n.xy, kernel);
+    return distorted;
+}
+
+//with elongation
+float2 anisotropy_map2(float2 kernel, float3 n, float limit)
+{    
+    n.xy *= limit;
+    float cosine = rsqrt(1 - dot(n.xy, n.xy));
+    float2 distorted = kernel - n.xy * dot(n.xy, kernel) * cosine;
+    return distorted * cosine;
+}
+
+float chebyshev_weight(float mean, float variance, float xi)
+{
+    return saturate(variance * rcp(max(1e-7, variance + (xi - mean) * (xi - mean))));
+}
 
 //DX9 safe float emulated bitfields... needed this for something that didn't work out
 //so I dumped it here in case I need it again. Works up to 24 (25?) digits and must be init with 0!

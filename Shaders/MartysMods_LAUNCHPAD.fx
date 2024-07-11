@@ -632,7 +632,7 @@ void CopyToFullres(in VSOUT i, out float4 o : SV_Target0)
 	Shader Entry Points - Normals
 =============================================================================*/
 
-void NormalsPS(in VSOUT i, out float2 o : SV_Target0)
+void NormalsPS(in VSOUT i, out float4 o : SV_Target0)
 {
 	//TODO optimize with tex2Dgather? Compute? What about scaled depth buffers? oh man
 	const float2 dirs[9] = 
@@ -682,8 +682,9 @@ void NormalsPS(in VSOUT i, out float2 o : SV_Target0)
 
 	float3 normal = weighted_normal.w < 1.0 ? best_normal.xyz : weighted_normal.xyz;
 	//normal = best_normal.xyz;
-	normal *= rsqrt(dot(normal, normal) + 1e-8);	
-	o = Math::octahedral_enc(-normal);//fixes bugs in RTGI, normal.z positive gives smaller error :)
+	normal *= rsqrt(dot(normal, normal) + 1e-8);
+	//V2 geom normals to .zw	
+	o = Math::octahedral_enc(-normal).xyxy;//fixes bugs in RTGI, normal.z positive gives smaller error :)
 }
 
 //gbuffer halfres for fast filtering
@@ -693,13 +694,8 @@ sampler sSmoothNormalsTempTex0 { Texture = SmoothNormalsTempTex0; MinFilter = PO
 texture SmoothNormalsTempTex1  { Width = BUFFER_WIDTH/2;   Height = BUFFER_HEIGHT/2;   Format = RGBA16F;  };
 sampler sSmoothNormalsTempTex1 { Texture = SmoothNormalsTempTex1; MinFilter = POINT; MagFilter = POINT; MipFilter = POINT;  };
 //high res copy back so we can fetch center tap at full res always
-texture SmoothNormalsTempTex2  < pooled = true; > { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16;  };
+texture SmoothNormalsTempTex2  < pooled = true; > { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RGBA16;  };
 sampler sSmoothNormalsTempTex2 { Texture = SmoothNormalsTempTex2; MinFilter = POINT; MagFilter = POINT; MipFilter = POINT;  };
-
-void CopyNormalsPS(in VSOUT i, out float2 o : SV_Target0)
-{
-	o = tex2D(sSmoothNormalsTempTex2, i.uv).xy;
-}
 
 void SmoothNormalsMakeGbufPS(in VSOUT i, out float4 o : SV_Target0)
 {
@@ -866,9 +862,10 @@ void SmoothNormalsPass0PS(in VSOUT i, out float4 o : SV_Target0)
 	o = smooth_normals_mkii(i, 0, sSmoothNormalsTempTex0);	
 }
 
-void SmoothNormalsPass1PS(in VSOUT i, out float2 o : SV_Target0)
+void SmoothNormalsPass1PS(in VSOUT i, out float4 o : SV_Target0)
 {	
 	float3 n = -smooth_normals_mkii(i, 1, sSmoothNormalsTempTex1).xyz;
+	float3 orig_n = n;
 
 	[branch]
 	if(ENABLE_TEXTURED_NORMALS)
@@ -946,7 +943,13 @@ void SmoothNormalsPass1PS(in VSOUT i, out float2 o : SV_Target0)
 		n = normalize(n);
 	}	
 
-	o = Math::octahedral_enc(n);
+	o.xy = Math::octahedral_enc(n);
+	o.zw = Math::octahedral_enc(orig_n);
+}
+
+void CopyNormalsPS(in VSOUT i, out float4 o : SV_Target0)
+{
+	o = tex2D(sSmoothNormalsTempTex2, i.uv);
 }
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0
@@ -1019,11 +1022,11 @@ technique MartysMods_Launchpad
 >
 {    
 	//pass{PrimitiveTopology = POINTLIST;VertexCount = 1;VertexShader = FrameWriteVS;PixelShader  = FrameWritePS;RenderTarget = StateCounterTex;} 
-	pass {VertexShader = MainVS;PixelShader = NormalsPS; RenderTarget = Deferred::NormalsTex; }		
+	pass {VertexShader = MainVS;PixelShader = NormalsPS; RenderTarget = Deferred::NormalsTexV2; }		
 	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsMakeGbufPS;  RenderTarget = SmoothNormalsTempTex0;}
 	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsPass0PS;  RenderTarget = SmoothNormalsTempTex1;}
 	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsPass1PS;  RenderTarget = SmoothNormalsTempTex2;}
-	pass {VertexShader = SmoothNormalsVS;PixelShader = CopyNormalsPS; RenderTarget = Deferred::NormalsTex; }
+	pass {VertexShader = SmoothNormalsVS;PixelShader = CopyNormalsPS; RenderTarget = Deferred::NormalsTexV2; }
 	
 	pass {VertexShader = MainVS;PixelShader = WriteDepthFeaturePS; RenderTarget0 = DepthLowres;} 
     pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget0 = FeaturePyramidPacked; RenderTargetWriteMask = 1 << 0;} 
