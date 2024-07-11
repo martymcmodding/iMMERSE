@@ -211,7 +211,7 @@ float pdf_vndf_bounded_iso(float3 wi, float3 wo, float3 n, float alpha)
 {    
     float3 m = normalize(wi + wo);
     float ndoth = saturate(dot(m, n));
-    float ndf = ndf_ggx(ndoth, alpha);
+    float ndf = ndf(ndoth, alpha);
 
     float wi_z = dot(n, wi);
     float z2 = wi_z * wi_z;

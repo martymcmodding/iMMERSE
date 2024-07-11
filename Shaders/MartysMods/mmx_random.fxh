@@ -56,7 +56,7 @@ float4 uint_to_unorm4(uint u)//8|8|8|8
 
 float  next1D(inout uint rng_state){rng_state = uint_hash(rng_state);return uint_to_unorm(rng_state);}
 float2 next2D(inout uint rng_state){rng_state = uint_hash(rng_state);return uint_to_unorm2(rng_state);}
-float3 next4D(inout uint rng_state){rng_state = uint_hash(rng_state);return uint_to_unorm3(rng_state);}
+float3 next3D(inout uint rng_state){rng_state = uint_hash(rng_state);return uint_to_unorm3(rng_state);}
 float4 next4D(inout uint rng_state){rng_state = uint_hash(rng_state);return uint_to_unorm4(rng_state);}
 
 float2 boxmuller(float2 u)
