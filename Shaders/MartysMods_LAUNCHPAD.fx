@@ -139,7 +139,20 @@ uniform float4 tempF3 <
     ui_min = -100.0;
     ui_max = 100.0;
 > = float4(1,1,1,1);
+
 uniform float4 tempF4 <
+    ui_type = "drag";
+    ui_min = -100.0;
+    ui_max = 100.0;
+> = float4(1,1,1,1);
+
+uniform float4 tempF5 <
+    ui_type = "drag";
+    ui_min = -100.0;
+    ui_max = 100.0;
+> = float4(1,1,1,1);
+
+uniform float4 tempF6 <
     ui_type = "drag";
     ui_min = -100.0;
     ui_max = 100.0;
@@ -147,8 +160,6 @@ uniform float4 tempF4 <
 
 uniform bool debug_key_down < source = "key"; keycode = 0x46; mode = ""; >;
 */
-
-
 /*=============================================================================
 	Textures, Samplers, Globals, Structs
 =============================================================================*/
@@ -182,7 +193,6 @@ uniform float FRAMETIME < source = "frametime"; >;
 
 #define MAX_MIP  	6 //do not change, tied to textures
 #define MIN_MIP 	0 //do not change, tied to textures
-#define MIP_BIAS 	1
 
 //don't touch, slight changes can have catastrophic effects on performance
 #define POOL_RADIUS 	5.0//10 * tempF1.x //10.0 * step(0, tempF1.x)
@@ -201,8 +211,23 @@ sampler	sBlueNoiseJitterTex   { Texture = BlueNoiseJitterTex; AddressU = WRAP; A
 #define sMotionTexIntermediateTex0 			Deferred::sMotionVectorsTex
 
 //curr in x, prev in y
-texture FeaturePyramidPacked          { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = RG8; MipLevels = 1 + MAX_MIP - MIN_MIP; };
-sampler sFeaturePyramidPacked         { Texture = FeaturePyramidPacked; MipFilter=INTERP; MagFilter=INTERP; MinFilter=INTERP; AddressU = MIRROR; AddressV = MIRROR; }; 
+texture FeaturePyramidLevel0   { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = RG8; };
+texture FeaturePyramidLevel1   { Width = BUFFER_WIDTH >> 1;   Height = BUFFER_HEIGHT >> 1;   Format = RG16F;};
+texture FeaturePyramidLevel2   { Width = BUFFER_WIDTH >> 2;   Height = BUFFER_HEIGHT >> 2;   Format = RG16F;};
+texture FeaturePyramidLevel3   { Width = BUFFER_WIDTH >> 3;   Height = BUFFER_HEIGHT >> 3;   Format = RG16F;};
+texture FeaturePyramidLevel4   { Width = BUFFER_WIDTH >> 4;   Height = BUFFER_HEIGHT >> 4;   Format = RG16F;};
+texture FeaturePyramidLevel5   { Width = BUFFER_WIDTH >> 5;   Height = BUFFER_HEIGHT >> 5;   Format = RG16F;};
+texture FeaturePyramidLevel6   { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RG16F;};
+texture FeaturePyramidLevel7   { Width = BUFFER_WIDTH >> 7;   Height = BUFFER_HEIGHT >> 7;   Format = RG16F;};
+sampler sFeaturePyramidLevel0  { Texture = FeaturePyramidLevel0; AddressU = MIRROR; AddressV = MIRROR; }; 
+sampler sFeaturePyramidLevel1  { Texture = FeaturePyramidLevel1;    AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel2  { Texture = FeaturePyramidLevel2;    AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel3  { Texture = FeaturePyramidLevel3;    AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel4  { Texture = FeaturePyramidLevel4;    AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel5  { Texture = FeaturePyramidLevel5;    AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel6  { Texture = FeaturePyramidLevel6;    AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel7  { Texture = FeaturePyramidLevel7;    AddressU = MIRROR; AddressV = MIRROR; };
+
 
 texture DepthLowresPrev          { Width = BUFFER_WIDTH/3;   Height = BUFFER_HEIGHT/3;   Format = R16F; };
 sampler sDepthLowresPrev         { Texture = DepthLowresPrev; MipFilter=POINT; MagFilter=POINT; MinFilter=POINT;}; 
@@ -234,278 +259,283 @@ struct CSIN
 //                                                                      
 //                                            o                         
 
-static float2 block_kernel[13] = 
+static float2 block_kernel[17] = 
 {
 	float2(0,  0), float2( 0, -1), float2( 0,  1), float2(-1,  0),	
 	float2(1,  0), float2( 0, -2), float2( 0,  2), float2(-2,  0),	
 	float2(2,  0), float2(-2, -2), float2( 2,  2), float2(-2,  2),	
-	float2(2, -2) 
-	//float2( 0, -4), float2( 0,  4), float2(-4,  0),	
-	//float2(4,  0)
+	float2(2, -2), 
+	float2(0, -4), float2( 0,  4), float2(-4,  0),	
+	float2(4,  0)
 };
 
 /*=============================================================================
 	Functions
 =============================================================================*/
 
-
-float get_curr_feature(float2 uv, int mip)
+float2 downsample_feature(sampler s, float2 uv)
 {
-	mip = max(0, mip - MIN_MIP);	
-	return tex2Dlod(sFeaturePyramidPacked, saturate(uv), mip).x;
+	float2 res = 0;	
+	float2 texelsize = rcp(tex2Dsize(s));
+	float wsum = 0;
+	for(int x = 0; x < 6; x++)
+	for(int y = 0; y < 6; y++)
+	{
+		float2 offs = float2(x, y); //0 to 5
+		offs -= 2.5; // -2.5 to 2.5
+		float g = exp(-dot(offs, offs) * 0.1);
+		res += g * tex2D(s, uv + offs * texelsize).rg;
+		wsum += g;
+	}
+	return res / wsum;	
 }
 
-float get_prev_feature(float2 uv, int mip)
-{
-	mip = max(0, mip - MIN_MIP);	
-	return tex2Dlod(sFeaturePyramidPacked, saturate(uv), mip).y;
-}
+void DownsampleFeaturePS1(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel0, i.uv);} 
+void DownsampleFeaturePS2(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel1, i.uv);} 
+void DownsampleFeaturePS3(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel2, i.uv);} 
+void DownsampleFeaturePS4(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel3, i.uv);} 
+void DownsampleFeaturePS5(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel4, i.uv);} 
+void DownsampleFeaturePS6(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel5, i.uv);}
+void DownsampleFeaturePS7(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel6, i.uv);}
 
 float3 get_jitter_blue(in int2 pos)
 {
 	return tex2Dfetch(sBlueNoiseJitterTex, pos % 32).xyz;
 }
 
-float2 estimate_subpixel(VSOUT i, int level, float2 total_motion, float2 search_scale)
+float loss(float a, float b)
 {
-	float3 A = 0;
-	float2 pq = 0;	
-
-	const int r = 1;
-	float feature_cache[2 * r + 1 + 1]; //1 row of pixels + 1 extra for the last element as we calculate gradient by looking ahead
-	
-	//prefetch first row
-	[unroll]
-	for(int x = -r; x <= r + 1; x++)
-		feature_cache[x + r] = get_curr_feature(i.uv + float2(x, -r) * search_scale, level);
-
-	[unroll]
-	for(int y = -r; y <= r; y++)	
-	{
-		[unroll]
-		for(int x = -r; x <= r; x++)
-		{
-			float f_curr   = feature_cache[x + r];
-			float f_next_x = feature_cache[x + r + 1];				
-			float f_next_y = get_curr_feature(i.uv + float2(x, y + 1) * search_scale, level);
-			float _g = get_prev_feature(i.uv + total_motion + float2(x, y) * search_scale, level);
-			
-			float2 grad = float2(f_next_x - f_curr, f_next_y - f_curr);
-
-			A += grad.xyy * grad.xxy;
-			pq += grad * (_g - f_curr);
-
-			feature_cache[x + r] = f_next_y;//as we're reading the next row, we can update the cached values as we go
-		}
-
-		//don't forget the last element in the row
-		feature_cache[2*r+1] = get_curr_feature(i.uv + float2(r + 1, y + 1) * search_scale, level);//update last element in row			
-	}
-
-	//Ax = b, solve for x
-	float det  = A.x * A.z - A.y * A.y;
-	
-	if(abs(det)< 1e-7) 
-		return 0;
-	
-	float2x2 Ainv = float2x2(A.z, -A.yy, A.x) * rcp(det);
-	float2 x = mul(Ainv, pq);
-	return clamp(-x, -1, 1) * search_scale;
+	float t = a - b;
+	return t*t;//abs(t); //SAD	
 }
 
+struct AdamOptimizer
+{
+	float2 m;
+	float v;
+	float beta1decayed, beta2decayed;
+	float beta1, beta2, epsilon;
+	float lr;
+};
 
 
-float4 block_matching(VSOUT i, int level, float4 coarse_layer, const int blocksize, bool do_refine)
+AdamOptimizer init_adam()
+{
+	AdamOptimizer a;
+	a.m = a.v = 0;
+	a.beta1decayed = a.beta2decayed = 1;
+
+	a.epsilon = 0.00000001;
+	a.beta1 = 0.9;
+	a.beta2 = 0.999;
+	a.lr = 0.000625;
+
+	return a;
+}
+
+float2 update_adam(inout AdamOptimizer a, float2 grad)
+{
+	float2 g = grad;
+	a.m = lerp(g, a.m, a.beta1);
+	a.v = lerp(dot(g, g), a.v, a.beta2);
+
+	a.beta1decayed *= a.beta1;
+	a.beta2decayed *= a.beta2;
+
+	float2 mhat = a.m / (1 - a.beta1decayed);
+	float vhat  = a.v / (1 - a.beta2decayed);
+
+	return a.lr * mhat / (sqrt(vhat) + a.epsilon);
+}
+
+float4 gradient_block_matching(sampler s_feature, VSOUT i, int level, float4 coarse_layer, const int blocksize)
 {	
-	level = clamp(level - MIP_BIAS, MIN_MIP, MAX_MIP); //sample one higher
-	float2 texelsize = rcp(tex2Dsize(sFeaturePyramidPacked, max(0, level - MIN_MIP)));
-
+	float2 texelsize = rcp(tex2Dsize(s_feature));	
+	float2 search_scale = texelsize;
 	float2 total_motion = coarse_layer.xy;
 
-	float2 search_scale = texelsize;
-	float local_block[13];
+	float2 m = 0;
+	float local_block[17];	
 
-	float m_xy = 0;
-	float2 m_x_xx = 0;
-	float2 m_y_yy = 0;
-	float best_rmse = 0;
-	
-	[unroll] //array index not natively addressable bla...
+	float3 SAD = 0; //center, +dx, +dy
+	float2 deltax = texelsize * float2(0.0625, 0);
+	float2 deltay = texelsize * float2(0, 0.0625);
+
+	[unroll]
 	for(uint k = 0; k < blocksize; k++)
 	{
 		float2 tuv = i.uv + block_kernel[k] * search_scale;
-		float t_local = get_curr_feature(tuv, level); 	
-		float t_search = get_prev_feature(tuv + total_motion, level);		
 
-		local_block[k] = t_local;
+		float g = tex2Dlod(s_feature, tuv, 0).x;
+		float f;	
 
-		m_xy += t_local * t_search;
-		m_x_xx += float2(t_local, t_local * t_local);
-		m_y_yy += float2(t_search, t_search * t_search);
+		f = tex2Dlod(s_feature, tuv + total_motion, 0).y;
+		SAD.x += loss(f, g);
+		f = tex2Dlod(s_feature, tuv + total_motion + deltax, 0).y;		
+		SAD.y += loss(f, g);
+		f = tex2Dlod(s_feature, tuv + total_motion + deltay, 0).y;
+		SAD.z += loss(f, g);
 
-		best_rmse += (t_local - t_search) * (t_local - t_search);
-	}
+		local_block[k] = g;
 
-	const float normfact = 1.0 / blocksize;
+	}	
+	
+	m /= blocksize;
 
-	float variance = abs(m_x_xx.y * normfact - m_x_xx.x * m_x_xx.x * normfact * normfact);
-	m_x_xx *= normfact;
-	m_y_yy *= normfact;
-	m_xy *= normfact;	
+	AdamOptimizer adam = init_adam();
+	float2 grad = (SAD.yz - SAD.x) / float2(deltax.x, deltay.y);
 
-	//somehow non-normalized values are better? dafuq?
-	float inv_sigma_x = rsqrt(1e-7 + abs(m_x_xx.y - m_x_xx.x * m_x_xx.x));
-	float inv_sigma_y = rsqrt(1e-7 + abs(m_y_yy.y - m_y_yy.x * m_y_yy.x));
-	float cov_xy = m_xy - m_x_xx.x * m_y_yy.x;
-	float best_corr = cov_xy * inv_sigma_x * inv_sigma_y;
+	float2 local_motion = 0;
+	float2 best_local_motion = 0;
+	float  best_SAD = SAD.x;
+	
+	int num_steps = 24;
+	int did_not_improve_score = 0;
 
-	//this fixes completely white areas from polluting the buffer with false offsets
-	if(variance < exp(-13.0) || best_corr > 0.999999) 
-		return float4(total_motion, 0, 0);
-
-	float randseed = get_jitter_blue(i.vpos.xy).x;
-	randseed = QMC::roberts1(level, randseed);
-
-	float2 dir; sincos(randseed * HALF_PI, dir.x, dir.y);
-	if(level == 0) dir = float2(0, 1);
-
-	int _octaves = SEARCH_OCTAVES;
-
-	if(level > 3) _octaves += 3; 
-
-	while(_octaves-- > 0)
+	[loop]
+	while(num_steps-- > 0 && did_not_improve_score < 2)
 	{
-		float2 local_motion = 0;
-		int _samples = 4;
-		
-		while(_samples-- > 0)		
-		{			
-			dir = float2(dir.y, -dir.x);
-			float2 search_offset = dir * texelsize;
-			float2 search_center = i.uv + total_motion + search_offset;
-			
-			m_xy = 0;
-			m_y_yy = 0;
+		local_motion -= update_adam(adam, grad);
+		SAD = 0;
+		m = 0;
 
-			float rmse = 0;
-		
-			[loop]
-			for(uint k = 0; k < blocksize; k++)
-			{
-				float t = get_prev_feature(search_center + block_kernel[k] * search_scale, level);
+		[unroll]
+		for(uint k = 0; k < blocksize; k++)
+		{
+			float2 tuv = i.uv + total_motion + local_motion + block_kernel[k] * search_scale;
 
-				m_xy += local_block[k] * t;
-				m_y_yy += float2(t, t * t);
+			float g = local_block[k];
+			float f;
 
-				rmse += (local_block[k] - t) * (local_block[k] - t);
-				if(rmse >= best_rmse) break; //makes this go faaaaaast
-			}
+			f = tex2Dlod(s_feature, tuv, 0).y;	
+			SAD.x += loss(f, g);
+			f = tex2Dlod(s_feature, tuv + deltax, 0).y;
+			SAD.y += loss(f, g);
+			f = tex2Dlod(s_feature, tuv + deltay, 0).y;
+			SAD.z += loss(f, g);
 
-			m_y_yy *= normfact;
-			m_xy *= normfact;
-
-			inv_sigma_y = rsqrt(1e-7 + abs(m_y_yy.y - m_y_yy.x * m_y_yy.x));
-			cov_xy = m_xy - m_x_xx.x * m_y_yy.x;
-
-			float corr = cov_xy * inv_sigma_x * inv_sigma_y;
-
-			if(corr <= best_corr || rmse >= best_rmse) continue;
-			best_rmse = rmse;		
-			best_corr = corr;
-			local_motion = search_offset;
-							
+			m += float2(g, g * g);
 		}
-		total_motion += local_motion; 
-		dir *= 0.5;
+
+		[flatten]
+		if(SAD.x < best_SAD)
+		{
+			best_SAD = SAD.x;
+			best_local_motion = local_motion;
+			did_not_improve_score = 0;			
+		}
+		else 
+		{
+			did_not_improve_score++;
+		}		
+
+		grad = (SAD.yz - SAD.x) / float2(deltax.x, deltay.y);
 	}
 
-	if(do_refine) total_motion += estimate_subpixel(i, level, total_motion, search_scale);
+	local_motion = best_local_motion;
+	total_motion += local_motion;
+
+	float variance = abs(m.y - m.x * m.x);
+	m /= blocksize;
+	
+	best_SAD /= blocksize;
+	best_SAD /= max(0.0001, variance);
 
 	float prev_depth_at_motion = tex2Dlod(sDepthLowresPrev, i.uv + total_motion, 0).x;	
-	float4 curr_layer = float4(total_motion, prev_depth_at_motion, best_rmse * normfact * 256);
+	float4 curr_layer = float4(total_motion, prev_depth_at_motion, best_SAD);
 	return curr_layer;
 }
 
-float4 pool_vectors(VSOUT i, int level, sampler motion_tex, int pass_id, float r)
+float hash11(float p)
+{
+    p = frac(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return frac(p);
+}
+
+float4 pool_vectors_new(VSOUT i, int level, sampler motion_tex, sampler feature_tex, float radius)
 {	
 	float center_z = tex2Dlod(sDepthLowres, i.uv, 0).x;
-	if(level == 0) center_z = Depth::get_linear_depth(i.uv);
-
 	float3 jitter = get_jitter_blue(i.vpos.xy);
-	float wsum = 0.001;
-	float4 finalsum = 0;
 
 	float2 texelsize = rcp(tex2Dsize(motion_tex));
-	float2 kernel_scale = texelsize * r;
 
-	float4 reservoir = 0;
-	float reservoir_w = 0;
+	float2 kernel_scale = texelsize * radius;
+
+	float4 flow_filtered = 0;
+	float4 flow_reservoir = 0;
+
+	float wsum_filtered = 0;
+	float wsum_reservoir = 0;
+	float fseed = jitter.z;
+
+	float4 center = tex2Dlod(motion_tex, i.uv, 0);
+	flow_filtered = center * 0.001;
+	wsum_filtered = 0.001;
 
 	[loop]for(int x = -2; x <= 1; x++)
 	[loop]for(int y = -2; y <= 1; y++)
-	{		 
+	{
 		float2 offs = float2(x, y) + jitter.xy;
-		float2 sample_uv = i.uv + offs * kernel_scale;
+		float2 sample_uv = i.uv + offs * kernel_scale;		
 
 		if(!Math::inside_screen(sample_uv)) continue;
 
 		float4 flow = tex2Dlod(motion_tex, sample_uv, 0);
-		float w = 0;		
 
-		float ws = flow.w;
-		w += ws * 4;		
-
-		float wm = dot(flow.xy * BUFFER_ASPECT_RATIO, flow.xy * BUFFER_SCREEN_SIZE);
-		w += wm * 4;
+		float match_error        = flow.w * 8000.0;
+		float flow_length_pixels = dot(flow.xy * BUFFER_ASPECT_RATIO, flow.xy * BUFFER_SCREEN_SIZE);
 
 		float sample_z = tex2Dlod(sDepthLowres, sample_uv, 0).x;
-		float wz = abs(center_z - sample_z) / max3(1e-5, center_z, sample_z);
-		w += wz * wz * 36 * 4;
+		float dzc = abs(center_z - sample_z) / max(1e-5, min(center_z, sample_z));
+		float dzp = abs(center_z - flow.z) / max(1e-5, min(center_z, flow.z));
 
-		wz = abs(center_z - flow.z) / max3(1e-5, center_z, flow.z);	
-		w += wz * wz * 36.0;
+		float wfactor = (dzc * dzc * 4 + dzp * dzp) * 32.0 + match_error * match_error * 4;
+		float w = exp2(-wfactor);
+		w = max(w, 0.001);
 
-		float copy_w = w;
+		flow_filtered += flow * w;
+		wsum_filtered += w;	
 
-		w = exp2(-w) + 0.001; 
-		finalsum += flow * w;
-		wsum += w;
-
-		float rand = QMC::roberts1((x+2) * 4 + (y+2), jitter.x);
-		w = exp2(-copy_w);
-		
-		w = w * 128;
-		w *=w;
-
-		reservoir_w += w;
-		if(rand * reservoir_w <= w || reservoir_w == 0)
-		{
-			reservoir = flow;
-		}
-	}
+		//clean weight
+		w = exp2(-wfactor);
+		w *= w;
 	
-	finalsum /= wsum;
+		wsum_reservoir += w;			
 
-	if(pass_id < 10)
-	{		
-		float rmse_avg = 0;
-		float rmse_res = 0;		
+		float rand = hash11(fseed * 161.88 + sin(w * 142.33));
+		fseed = rand;
+
+		if(rand * wsum_reservoir < w)
+			flow_reservoir = flow;
+	}
+
+	flow_filtered /= max(1e-3, wsum_filtered);
+
+	if(level > 0.5)
+	{	
+		texelsize = rcp(tex2Dsize(feature_tex));	
+		float loss_avg = 0;	
+		float loss_res = 0;	
+		int num_samples = 9;
 
 		[loop]
-		for(uint k = 0; k < 9; k++)
+		for(uint k = 0; k < num_samples; k++)
 		{
-			float c = get_curr_feature(i.uv + block_kernel[k] * texelsize, level - 1);
-			float p_avg = get_prev_feature(i.uv + finalsum.xy + block_kernel[k] * texelsize, level - 1);
-			float p_res = get_prev_feature(i.uv + reservoir.xy + block_kernel[k] * texelsize, level - 1);			
-
-			rmse_avg += (c - p_avg) * (c - p_avg);
-			rmse_res += (c - p_res) * (c - p_res);
+			float2 kernel_uv = i.uv + block_kernel[k] * texelsize;
+			float f = tex2Dlod(feature_tex, kernel_uv, 0).x;
+			float g1 = tex2Dlod(feature_tex, kernel_uv + flow_filtered.xy, 0).y;
+			float g2 = tex2Dlod(feature_tex, kernel_uv + flow_reservoir.xy, 0).y;
+			loss_avg += loss(f, g1);
+			loss_res += loss(f, g2);
 		}
 
-		finalsum = rmse_res < rmse_avg ? reservoir : finalsum; 
+		if(loss_res < loss_avg)
+			flow_filtered = flow_reservoir;
 	}
 
-	return finalsum;
+	return flow_filtered;
 }
 
 float3 showmotion(float2 motion)
@@ -513,7 +543,7 @@ float3 showmotion(float2 motion)
 	float angle = atan2(motion.y, motion.x);
 	float dist = length(motion);
 	float3 rgb = saturate(3 * abs(2 * frac(angle / 6.283 + float3(0, -1.0/3.0, 1.0/3.0)) - 1) - 1);
-	return lerp(0.5, rgb, saturate(log(1 + dist * 400.0)));//normalize by frametime such that we don't need to adjust visualization intensity all the time
+	return lerp(0.5, rgb, saturate(log(1 + dist * 400.0 / FRAMETIME)));//normalize by frametime such that we don't need to adjust visualization intensity all the time
 }
 
 //turbo colormap fit, turned into MADD form
@@ -604,28 +634,30 @@ void WriteFeaturePS2(in VSOUT i, out float4 o : SV_Target0)
 	//if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x) discard;
 }
 
-void BlockMatchingPassPS6(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 6, 0.0.xxxx,        									  13, TAYLOR_EXPANSION);}
-void FilterPass6(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 0, POOL_RADIUS);}
-void BlockMatchingPassPS5(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 5, pool_vectors(i, 3, sMotionTexNewB, 1, POOL_RADIUS), 13, TAYLOR_EXPANSION);}
-void FilterPass5(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 2, POOL_RADIUS);}
-void BlockMatchingPassPS4(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 4, pool_vectors(i, 3, sMotionTexNewB, 3, POOL_RADIUS), 13, TAYLOR_EXPANSION);}
-void FilterPass4(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 4, POOL_RADIUS);}
-void BlockMatchingPassPS3(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 3, pool_vectors(i, 3, sMotionTexNewB, 5, POOL_RADIUS), 13, TAYLOR_EXPANSION);}
-void FilterPass3(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 6, POOL_RADIUS);}
-void BlockMatchingPassPS2(in VSOUT i, out float4 o : SV_Target0){o = block_matching(i, 2, pool_vectors(i, 3, sMotionTexNewB, 7, POOL_RADIUS), 13, TAYLOR_EXPANSION);}
-void FilterPass2(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 8, POOL_RADIUS);}
-void BlockMatchingPassPS1(in VSOUT i, out float4 o : SV_Target0)
+
+void NEW_BlockMatchingPassPS8(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel7, i, 8, 0.0.xxxx, 13);}
+void NEW_FilterPass8(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 8, sMotionTexNewA, sFeaturePyramidLevel7, POOL_RADIUS);}
+void NEW_BlockMatchingPassPS7(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel6, i, 7, pool_vectors_new(i, 7, sMotionTexNewB, sFeaturePyramidLevel6, POOL_RADIUS), 13);}
+void NEW_FilterPass7(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 7, sMotionTexNewA, sFeaturePyramidLevel6, POOL_RADIUS);}
+void NEW_BlockMatchingPassPS6(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel5, i, 6, pool_vectors_new(i, 5, sMotionTexNewB, sFeaturePyramidLevel5, POOL_RADIUS), 13);}
+void NEW_FilterPass6(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 5, sMotionTexNewA, sFeaturePyramidLevel5, POOL_RADIUS);}
+void NEW_BlockMatchingPassPS5(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel4, i, 5, pool_vectors_new(i, 4, sMotionTexNewB, sFeaturePyramidLevel4, POOL_RADIUS), 13);}
+void NEW_FilterPass5(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 4, sMotionTexNewA, sFeaturePyramidLevel4, POOL_RADIUS);}
+void NEW_BlockMatchingPassPS4(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel3, i, 4, pool_vectors_new(i, 3, sMotionTexNewB, sFeaturePyramidLevel3, POOL_RADIUS), 13);}
+void NEW_FilterPass4(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 3, sMotionTexNewA, sFeaturePyramidLevel3, POOL_RADIUS);}
+void NEW_BlockMatchingPassPS3(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel2, i, 3, pool_vectors_new(i, 2, sMotionTexNewB, sFeaturePyramidLevel2, POOL_RADIUS), 13);}
+void NEW_FilterPass3(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 2, sMotionTexNewA, sFeaturePyramidLevel2, POOL_RADIUS);}
+void NEW_BlockMatchingPassPS2(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel1, i, 2, pool_vectors_new(i, 1, sMotionTexNewB, sFeaturePyramidLevel1, POOL_RADIUS), 13);}
+void NEW_FilterPass2(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 1, sMotionTexNewA, sFeaturePyramidLevel1, POOL_RADIUS);}
+void NEW_BlockMatchingPassPS1(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel0, i, 1, pool_vectors_new(i, 0, sMotionTexNewB, sFeaturePyramidLevel0, POOL_RADIUS), 13);}
+void NEW_FilterPass1(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 0, sMotionTexNewA, sFeaturePyramidLevel0, POOL_RADIUS);}
+
+void NEW_CopyToFullres(in VSOUT i, out float4 o : SV_Target0)
 {
-	o = pool_vectors(i, 3, sMotionTexNewB, 9, POOL_RADIUS);
-	o = block_matching(i, 1, o, 13, TAYLOR_EXPANSION);
-}
-void FilterPass1(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors(i, 3, sMotionTexNewA, 10, POOL_RADIUS);}
-void CopyToFullres(in VSOUT i, out float4 o : SV_Target0)
-{
-	o = pool_vectors(i, 0, sMotionTexNewB, 11, UPSCALE_RADIUS);
+	o = pool_vectors_new(i, 0, sMotionTexNewB, sFeaturePyramidLevel0, UPSCALE_RADIUS);
 	[branch]
 	if(OPTICAL_FLOW_RES == 1) 
-		o = block_matching(i, 0, o, 9, false);//no taylor expansion here, costs too much
+		o = gradient_block_matching(sFeaturePyramidLevel0, i, 0, o, 9);
 }
 
 /*=============================================================================
@@ -1029,29 +1061,39 @@ technique MartysMods_Launchpad
 	pass {VertexShader = SmoothNormalsVS;PixelShader = CopyNormalsPS; RenderTarget = Deferred::NormalsTexV2; }
 	
 	pass {VertexShader = MainVS;PixelShader = WriteDepthFeaturePS; RenderTarget0 = DepthLowres;} 
-    pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget0 = FeaturePyramidPacked; RenderTargetWriteMask = 1 << 0;} 
-	
-	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS6;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = FilterPass6;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS5;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = FilterPass5;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS4;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = FilterPass4;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS3;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = FilterPass3;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS2;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = FilterPass2;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS1;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = FilterPass1;		    RenderTarget = MotionTexNewB;}
+    pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget0 = FeaturePyramidLevel0; RenderTargetWriteMask = 1 << 0;} 
+
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS1;	RenderTarget = FeaturePyramidLevel1;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS2;	RenderTarget = FeaturePyramidLevel2;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS3;	RenderTarget = FeaturePyramidLevel3;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS4;	RenderTarget = FeaturePyramidLevel4;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS5;	RenderTarget = FeaturePyramidLevel5;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS6;	RenderTarget = FeaturePyramidLevel6;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS7;	RenderTarget = FeaturePyramidLevel7;}
+
+	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS8;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass8;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS7;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass7;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS6;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass6;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS5;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass5;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS4;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass4;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS3;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass3;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS2;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass2;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS1;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass1;		    RenderTarget = MotionTexNewB;}
 		
-	pass {VertexShader = MainVS;PixelShader = CopyToFullres;		RenderTarget = MotionTexIntermediateTex0;}
+	pass {VertexShader = MainVS;PixelShader = NEW_CopyToFullres;		RenderTarget = MotionTexIntermediateTex0;}
 
 	pass {VertexShader = MainVS;PixelShader = WritePrevLowresDepthPS; RenderTarget0 = DepthLowresPrev;} 
-	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS2; RenderTarget0 = FeaturePyramidPacked; RenderTargetWriteMask = 1 << 1;}	
+	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS2; RenderTarget0 = FeaturePyramidLevel0; RenderTargetWriteMask = 1 << 1;}	
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
 	pass {VertexShader = MainVS;PixelShader  = DebugPS;  }			
-#endif 
-
-
+#endif
 }
