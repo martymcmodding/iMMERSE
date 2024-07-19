@@ -121,3 +121,12 @@ float4 tex2Dlod(sampler s, float2 uv, float mip)
 {
     return tex2Dlod(s, float4(uv, 0, mip));
 }
+
+//log2 macro for uints up to 16 bit, inefficient in runtime but preprocessor doesn't care
+#define T1(x,n) ((uint(x)>>(n))>0)
+#define T2(x,n) (T1(x,n)+T1(x,n+1))
+#define T4(x,n) (T2(x,n)+T2(x,n+2))
+#define T8(x,n) (T4(x,n)+T4(x,n+4))
+#define LOG2(x) (T8(x,0)+T8(x,8))
+
+#define CEIL_DIV(num, denom) ((((num) - 1) / (denom)) + 1)
