@@ -180,19 +180,8 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_camera.fxh"
 #include ".\MartysMods\mmx_deferred.fxh"
 
-#define TAYLOR_EXPANSION 	true
-#define INTERP 				LINEAR
-#define FILTER_WIDE	 		true 
-#define FILTER_NARROW 		false
-
-#define SEARCH_OCTAVES      2
-#define OCTAVE_SAMPLES      4
-
 uniform uint FRAMECOUNT < source = "framecount"; >;
 uniform float FRAMETIME < source = "frametime"; >;
-
-#define MAX_MIP  	6 //do not change, tied to textures
-#define MIN_MIP 	0 //do not change, tied to textures
 
 //don't touch, slight changes can have catastrophic effects on performance
 #define POOL_RADIUS 	5.0//10 * tempF1.x //10.0 * step(0, tempF1.x)
@@ -211,7 +200,8 @@ sampler	sBlueNoiseJitterTex   { Texture = BlueNoiseJitterTex; AddressU = WRAP; A
 #define sMotionTexIntermediateTex0 			Deferred::sMotionVectorsTex
 
 //curr in x, prev in y
-texture FeaturePyramidLevel0   { Width = BUFFER_WIDTH>>MIN_MIP;   Height = BUFFER_HEIGHT>>MIN_MIP;   Format = RG8; };
+#if __RENDERER__ >= RENDERER_D3D10
+texture FeaturePyramidLevel0   { Width = BUFFER_WIDTH;   	  Height = BUFFER_HEIGHT;        Format = RG8; };
 texture FeaturePyramidLevel1   { Width = BUFFER_WIDTH >> 1;   Height = BUFFER_HEIGHT >> 1;   Format = RG16F;};
 texture FeaturePyramidLevel2   { Width = BUFFER_WIDTH >> 2;   Height = BUFFER_HEIGHT >> 2;   Format = RG16F;};
 texture FeaturePyramidLevel3   { Width = BUFFER_WIDTH >> 3;   Height = BUFFER_HEIGHT >> 3;   Format = RG16F;};
@@ -220,19 +210,29 @@ texture FeaturePyramidLevel5   { Width = BUFFER_WIDTH >> 5;   Height = BUFFER_HE
 texture FeaturePyramidLevel6   { Width = BUFFER_WIDTH >> 6;   Height = BUFFER_HEIGHT >> 6;   Format = RG16F;};
 texture FeaturePyramidLevel7   { Width = BUFFER_WIDTH >> 7;   Height = BUFFER_HEIGHT >> 7;   Format = RG16F;};
 sampler sFeaturePyramidLevel0  { Texture = FeaturePyramidLevel0; AddressU = MIRROR; AddressV = MIRROR; }; 
-sampler sFeaturePyramidLevel1  { Texture = FeaturePyramidLevel1;    AddressU = MIRROR; AddressV = MIRROR; };
-sampler sFeaturePyramidLevel2  { Texture = FeaturePyramidLevel2;    AddressU = MIRROR; AddressV = MIRROR; };
-sampler sFeaturePyramidLevel3  { Texture = FeaturePyramidLevel3;    AddressU = MIRROR; AddressV = MIRROR; };
-sampler sFeaturePyramidLevel4  { Texture = FeaturePyramidLevel4;    AddressU = MIRROR; AddressV = MIRROR; };
-sampler sFeaturePyramidLevel5  { Texture = FeaturePyramidLevel5;    AddressU = MIRROR; AddressV = MIRROR; };
-sampler sFeaturePyramidLevel6  { Texture = FeaturePyramidLevel6;    AddressU = MIRROR; AddressV = MIRROR; };
-sampler sFeaturePyramidLevel7  { Texture = FeaturePyramidLevel7;    AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel1  { Texture = FeaturePyramidLevel1; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel2  { Texture = FeaturePyramidLevel2; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel3  { Texture = FeaturePyramidLevel3; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel4  { Texture = FeaturePyramidLevel4; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel5  { Texture = FeaturePyramidLevel5; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel6  { Texture = FeaturePyramidLevel6; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel7  { Texture = FeaturePyramidLevel7; AddressU = MIRROR; AddressV = MIRROR; };
+#else //fewer textures that still need to cover a wide range, so we use a pyramid with 3x3 reduction instead of 2x2
+texture FeaturePyramidLevel0   { Width = BUFFER_WIDTH;   	Height = BUFFER_HEIGHT;   Format = RG8; };
+texture FeaturePyramidLevel1   { Width = BUFFER_WIDTH/3;   	Height = BUFFER_HEIGHT/3;   Format = RG16F;};
+texture FeaturePyramidLevel2   { Width = BUFFER_WIDTH/9;   	Height = BUFFER_HEIGHT/9;   Format = RG16F;};
+texture FeaturePyramidLevel3   { Width = BUFFER_WIDTH/27;   Height = BUFFER_HEIGHT/27;  Format = RG16F;};
+texture FeaturePyramidLevel4   { Width = BUFFER_WIDTH/81;   Height = BUFFER_HEIGHT/81;  Format = RG16F;};
 
+sampler sFeaturePyramidLevel0  { Texture = FeaturePyramidLevel0; AddressU = MIRROR; AddressV = MIRROR; }; 
+sampler sFeaturePyramidLevel1  { Texture = FeaturePyramidLevel1; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel2  { Texture = FeaturePyramidLevel2; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel3  { Texture = FeaturePyramidLevel3; AddressU = MIRROR; AddressV = MIRROR; };
+sampler sFeaturePyramidLevel4  { Texture = FeaturePyramidLevel4; AddressU = MIRROR; AddressV = MIRROR; };
+#endif
 
-texture DepthLowresPrev          { Width = BUFFER_WIDTH/3;   Height = BUFFER_HEIGHT/3;   Format = R16F; };
-sampler sDepthLowresPrev         { Texture = DepthLowresPrev; MipFilter=POINT; MagFilter=POINT; MinFilter=POINT;}; 
-texture DepthLowres          { Width = BUFFER_WIDTH/3;   Height = BUFFER_HEIGHT/3; Format = R16F;};
-sampler sDepthLowres         { Texture = DepthLowres;  /*MipFilter=POINT; MagFilter=POINT; MinFilter=POINT;*/}; 
+texture DepthLowresPacked          { Width = BUFFER_WIDTH/3;   Height = BUFFER_HEIGHT/3;   Format = RG16F; };
+sampler sDepthLowresPacked         { Texture = DepthLowresPacked; MipFilter=POINT; MagFilter=POINT; MinFilter=POINT;}; 
 
 struct VSOUT
 {
@@ -259,19 +259,31 @@ struct CSIN
 //                                                                      
 //                                            o                         
 
-static float2 block_kernel[17] = 
+static float2 block_kernel[13] = 
 {
 	float2(0,  0), float2( 0, -1), float2( 0,  1), float2(-1,  0),	
 	float2(1,  0), float2( 0, -2), float2( 0,  2), float2(-2,  0),	
 	float2(2,  0), float2(-2, -2), float2( 2,  2), float2(-2,  2),	
-	float2(2, -2), 
+	float2(2, -2)/*, 
 	float2(0, -4), float2( 0,  4), float2(-4,  0),	
-	float2(4,  0)
+	float2(4,  0)*/
 };
 
 /*=============================================================================
 	Functions
 =============================================================================*/
+
+float get_prev_depth(float2 uv)
+{
+	return tex2Dlod(sDepthLowresPacked, uv, 0).y;
+}
+
+float get_curr_depth(float2 uv)
+{
+	return tex2Dlod(sDepthLowresPacked, uv, 0).x;
+}
+
+#if __RENDERER__ >= RENDERER_D3D10
 
 float2 downsample_feature(sampler s, float2 uv)
 {
@@ -297,6 +309,31 @@ void DownsampleFeaturePS4(in VSOUT i, out float2 o : SV_Target0){o = downsample_
 void DownsampleFeaturePS5(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel4, i.uv);} 
 void DownsampleFeaturePS6(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel5, i.uv);}
 void DownsampleFeaturePS7(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature(sFeaturePyramidLevel6, i.uv);}
+
+#else 
+
+float2 downsample_feature_tri(sampler s, float2 uv)
+{
+	float2 res = 0;	
+	float2 texelsize = rcp(tex2Dsize(s));
+	float wsum = 0;
+	for(int x = -6; x <= 6; x++)
+	for(int y = -6; y <= 6; y++)
+	{
+		float2 offs = float2(x, y); 
+		float g = exp(-dot(offs, offs) * 0.03);
+		res += g * tex2D(s, uv + offs * texelsize).rg;
+		wsum += g;
+	}
+	return res / wsum;	
+}
+
+void DownsampleFeatureTriPS1(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature_tri(sFeaturePyramidLevel0, i.uv);}
+void DownsampleFeatureTriPS2(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature_tri(sFeaturePyramidLevel1, i.uv);}
+void DownsampleFeatureTriPS3(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature_tri(sFeaturePyramidLevel2, i.uv);}
+void DownsampleFeatureTriPS4(in VSOUT i, out float2 o : SV_Target0){o = downsample_feature_tri(sFeaturePyramidLevel3, i.uv);}
+
+#endif
 
 float3 get_jitter_blue(in int2 pos)
 {
@@ -355,7 +392,7 @@ float4 gradient_block_matching(sampler s_feature, VSOUT i, int level, float4 coa
 	float2 total_motion = coarse_layer.xy;
 
 	float2 m = 0;
-	float local_block[17];	
+	float local_block[13];
 
 	float3 SAD = 0; //center, +dx, +dy
 	float2 deltax = texelsize * float2(0.0625, 0);
@@ -441,7 +478,7 @@ float4 gradient_block_matching(sampler s_feature, VSOUT i, int level, float4 coa
 	best_SAD /= blocksize;
 	best_SAD /= max(0.0001, variance);
 
-	float prev_depth_at_motion = tex2Dlod(sDepthLowresPrev, i.uv + total_motion, 0).x;	
+	float prev_depth_at_motion = get_prev_depth(i.uv + total_motion);
 	float4 curr_layer = float4(total_motion, prev_depth_at_motion, best_SAD);
 	return curr_layer;
 }
@@ -456,7 +493,8 @@ float hash11(float p)
 
 float4 pool_vectors_new(VSOUT i, int level, sampler motion_tex, sampler feature_tex, float radius)
 {	
-	float center_z = tex2Dlod(sDepthLowres, i.uv, 0).x;
+	float center_z = get_curr_depth(i.uv);
+	if(level == 0) center_z = Depth::get_linear_depth(i.uv);
 	float3 jitter = get_jitter_blue(i.vpos.xy);
 
 	float2 texelsize = rcp(tex2Dsize(motion_tex));
@@ -487,7 +525,7 @@ float4 pool_vectors_new(VSOUT i, int level, sampler motion_tex, sampler feature_
 		float match_error        = flow.w * 8000.0;
 		float flow_length_pixels = dot(flow.xy * BUFFER_ASPECT_RATIO, flow.xy * BUFFER_SCREEN_SIZE);
 
-		float sample_z = tex2Dlod(sDepthLowres, sample_uv, 0).x;
+		float sample_z = get_curr_depth(sample_uv);
 		float dzc = abs(center_z - sample_z) / max(1e-5, min(center_z, sample_z));
 		float dzp = abs(center_z - flow.z) / max(1e-5, min(center_z, flow.z));
 
@@ -543,7 +581,7 @@ float3 showmotion(float2 motion)
 	float angle = atan2(motion.y, motion.x);
 	float dist = length(motion);
 	float3 rgb = saturate(3 * abs(2 * frac(angle / 6.283 + float3(0, -1.0/3.0, 1.0/3.0)) - 1) - 1);
-	return lerp(0.5, rgb, saturate(log(1 + dist * 400.0 / FRAMETIME)));//normalize by frametime such that we don't need to adjust visualization intensity all the time
+	return lerp(0.5, rgb, saturate(log(1 + dist * 400.0  / FRAMETIME)));//normalize by frametime such that we don't need to adjust visualization intensity all the time
 }
 
 //turbo colormap fit, turned into MADD form
@@ -579,7 +617,6 @@ float  FrameWritePS(in float4 vpos : SV_Position) : SV_Target0 {return FRAMECOUN
 void WriteDepthFeaturePS(in VSOUT i, out float2 o : SV_Target0)
 {
 	o = Depth::get_linear_depth(i.uv);
-	o.y = o.x * o.x;
 	//if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x + 1) discard;
 }
 
@@ -605,7 +642,7 @@ void WriteFeaturePS(in VSOUT i, out float4 o : SV_Target0)
 	//if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x + 1) discard;
 }
 
-void WritePrevLowresDepthPS(in VSOUT i, out float o : SV_Target0)
+void WritePrevLowresDepthPS(in VSOUT i, out float2 o : SV_Target0)
 {
 	o = Depth::get_linear_depth(i.uv);
 	//if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x) discard;
@@ -634,31 +671,55 @@ void WriteFeaturePS2(in VSOUT i, out float4 o : SV_Target0)
 	//if(FRAMECOUNT > tex2Dfetch(sStateCounterTex, int2(0, 0)).x) discard;
 }
 
+#if __RENDERER__ >= RENDERER_D3D10
 
-void NEW_BlockMatchingPassPS8(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel7, i, 8, 0.0.xxxx, 13);}
-void NEW_FilterPass8(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 8, sMotionTexNewA, sFeaturePyramidLevel7, POOL_RADIUS);}
-void NEW_BlockMatchingPassPS7(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel6, i, 7, pool_vectors_new(i, 7, sMotionTexNewB, sFeaturePyramidLevel6, POOL_RADIUS), 13);}
-void NEW_FilterPass7(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 7, sMotionTexNewA, sFeaturePyramidLevel6, POOL_RADIUS);}
-void NEW_BlockMatchingPassPS6(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel5, i, 6, pool_vectors_new(i, 5, sMotionTexNewB, sFeaturePyramidLevel5, POOL_RADIUS), 13);}
-void NEW_FilterPass6(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 5, sMotionTexNewA, sFeaturePyramidLevel5, POOL_RADIUS);}
-void NEW_BlockMatchingPassPS5(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel4, i, 5, pool_vectors_new(i, 4, sMotionTexNewB, sFeaturePyramidLevel4, POOL_RADIUS), 13);}
-void NEW_FilterPass5(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 4, sMotionTexNewA, sFeaturePyramidLevel4, POOL_RADIUS);}
-void NEW_BlockMatchingPassPS4(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel3, i, 4, pool_vectors_new(i, 3, sMotionTexNewB, sFeaturePyramidLevel3, POOL_RADIUS), 13);}
-void NEW_FilterPass4(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 3, sMotionTexNewA, sFeaturePyramidLevel3, POOL_RADIUS);}
-void NEW_BlockMatchingPassPS3(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel2, i, 3, pool_vectors_new(i, 2, sMotionTexNewB, sFeaturePyramidLevel2, POOL_RADIUS), 13);}
-void NEW_FilterPass3(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 2, sMotionTexNewA, sFeaturePyramidLevel2, POOL_RADIUS);}
-void NEW_BlockMatchingPassPS2(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel1, i, 2, pool_vectors_new(i, 1, sMotionTexNewB, sFeaturePyramidLevel1, POOL_RADIUS), 13);}
-void NEW_FilterPass2(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 1, sMotionTexNewA, sFeaturePyramidLevel1, POOL_RADIUS);}
-void NEW_BlockMatchingPassPS1(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel0, i, 1, pool_vectors_new(i, 0, sMotionTexNewB, sFeaturePyramidLevel0, POOL_RADIUS), 13);}
-void NEW_FilterPass1(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 0, sMotionTexNewA, sFeaturePyramidLevel0, POOL_RADIUS);}
+void BlockMatchingPassPS8(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel7, i, 8, 0.0.xxxx, 13);}
+void FilterPass8(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 8, sMotionTexNewA, sFeaturePyramidLevel7, POOL_RADIUS);}
+void BlockMatchingPassPS7(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel6, i, 7, pool_vectors_new(i, 7, sMotionTexNewB, sFeaturePyramidLevel6, POOL_RADIUS), 13);}
+void FilterPass7(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 7, sMotionTexNewA, sFeaturePyramidLevel6, POOL_RADIUS);}
+void BlockMatchingPassPS6(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel5, i, 6, pool_vectors_new(i, 5, sMotionTexNewB, sFeaturePyramidLevel5, POOL_RADIUS), 13);}
+void FilterPass6(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 5, sMotionTexNewA, sFeaturePyramidLevel5, POOL_RADIUS);}
+void BlockMatchingPassPS5(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel4, i, 5, pool_vectors_new(i, 4, sMotionTexNewB, sFeaturePyramidLevel4, POOL_RADIUS), 13);}
+void FilterPass5(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 4, sMotionTexNewA, sFeaturePyramidLevel4, POOL_RADIUS);}
+void BlockMatchingPassPS4(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel3, i, 4, pool_vectors_new(i, 3, sMotionTexNewB, sFeaturePyramidLevel3, POOL_RADIUS), 13);}
+void FilterPass4(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 3, sMotionTexNewA, sFeaturePyramidLevel3, POOL_RADIUS);}
+void BlockMatchingPassPS3(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel2, i, 3, pool_vectors_new(i, 2, sMotionTexNewB, sFeaturePyramidLevel2, POOL_RADIUS), 13);}
+void FilterPass3(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 2, sMotionTexNewA, sFeaturePyramidLevel2, POOL_RADIUS);}
+void BlockMatchingPassPS2(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel1, i, 2, pool_vectors_new(i, 1, sMotionTexNewB, sFeaturePyramidLevel1, POOL_RADIUS), 13);}
+void FilterPass2(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 1, sMotionTexNewA, sFeaturePyramidLevel1, POOL_RADIUS);}
+void BlockMatchingPassPS1(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel0, i, 1, pool_vectors_new(i, 0, sMotionTexNewB, sFeaturePyramidLevel0, POOL_RADIUS), 13);}
+void FilterPass1(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 0, sMotionTexNewA, sFeaturePyramidLevel0, POOL_RADIUS);}
 
-void NEW_CopyToFullres(in VSOUT i, out float4 o : SV_Target0)
+void CopyToFullres(in VSOUT i, out float4 o : SV_Target0)
 {
 	o = pool_vectors_new(i, 0, sMotionTexNewB, sFeaturePyramidLevel0, UPSCALE_RADIUS);
 	[branch]
 	if(OPTICAL_FLOW_RES == 1) 
 		o = gradient_block_matching(sFeaturePyramidLevel0, i, 0, o, 9);
 }
+
+#else
+
+void BlockMatchingPassPS5(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel4, i, 5, 0.0.xxxx, 13);}
+void FilterPass5(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 4, sMotionTexNewA, sFeaturePyramidLevel4, POOL_RADIUS);}
+void BlockMatchingPassPS4(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel3, i, 4, pool_vectors_new(i, 3, sMotionTexNewB, sFeaturePyramidLevel3, POOL_RADIUS), 13);}
+void FilterPass4(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 3, sMotionTexNewA, sFeaturePyramidLevel3, POOL_RADIUS);}
+void BlockMatchingPassPS3(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel2, i, 3, pool_vectors_new(i, 2, sMotionTexNewB, sFeaturePyramidLevel2, POOL_RADIUS), 13);}
+void FilterPass3(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 2, sMotionTexNewA, sFeaturePyramidLevel2, POOL_RADIUS);}
+void BlockMatchingPassPS2(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel1, i, 2, pool_vectors_new(i, 1, sMotionTexNewB, sFeaturePyramidLevel1, POOL_RADIUS), 13);}
+void FilterPass2(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 1, sMotionTexNewA, sFeaturePyramidLevel1, POOL_RADIUS);}
+void BlockMatchingPassPS1(in VSOUT i, out float4 o : SV_Target0){o = gradient_block_matching(sFeaturePyramidLevel0, i, 1, pool_vectors_new(i, 0, sMotionTexNewB, sFeaturePyramidLevel0, POOL_RADIUS), 13);}
+void FilterPass1(in VSOUT i, out float4 o : SV_Target0){o = pool_vectors_new(i, 0, sMotionTexNewA, sFeaturePyramidLevel0, POOL_RADIUS);}
+
+void CopyToFullres(in VSOUT i, out float4 o : SV_Target0)
+{
+	o = pool_vectors_new(i, 0, sMotionTexNewB, sFeaturePyramidLevel0, UPSCALE_RADIUS);
+	[branch]
+	if(OPTICAL_FLOW_RES == 1) 
+		o = gradient_block_matching(sFeaturePyramidLevel0, i, 0, o, 9);
+}
+
+#endif
 
 /*=============================================================================
 	Shader Entry Points - Normals
@@ -1060,9 +1121,10 @@ technique MartysMods_Launchpad
 	pass {VertexShader = SmoothNormalsVS;PixelShader = SmoothNormalsPass1PS;  RenderTarget = SmoothNormalsTempTex2;}
 	pass {VertexShader = SmoothNormalsVS;PixelShader = CopyNormalsPS; RenderTarget = Deferred::NormalsTexV2; }
 	
-	pass {VertexShader = MainVS;PixelShader = WriteDepthFeaturePS; RenderTarget0 = DepthLowres;} 
+	pass {VertexShader = MainVS;PixelShader = WriteDepthFeaturePS; RenderTarget0 = DepthLowresPacked; RenderTargetWriteMask = 1 << 0;} 
     pass {VertexShader = MainVS;PixelShader = WriteFeaturePS; RenderTarget0 = FeaturePyramidLevel0; RenderTargetWriteMask = 1 << 0;} 
 
+#if __RENDERER__ >= RENDERER_D3D10
 	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS1;	RenderTarget = FeaturePyramidLevel1;}
 	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS2;	RenderTarget = FeaturePyramidLevel2;}
 	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS3;	RenderTarget = FeaturePyramidLevel3;}
@@ -1071,26 +1133,45 @@ technique MartysMods_Launchpad
 	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS6;	RenderTarget = FeaturePyramidLevel6;}
 	pass {VertexShader = MainVS;PixelShader = DownsampleFeaturePS7;	RenderTarget = FeaturePyramidLevel7;}
 
-	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS8;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass8;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS7;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass7;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS6;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass6;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS5;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass5;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS4;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass4;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS3;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass3;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS2;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass2;		    RenderTarget = MotionTexNewB;}	
-	pass {VertexShader = MainVS;PixelShader = NEW_BlockMatchingPassPS1;	RenderTarget = MotionTexNewA;}
-	pass {VertexShader = MainVS;PixelShader = NEW_FilterPass1;		    RenderTarget = MotionTexNewB;}
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS8;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass8;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS7;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass7;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS6;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass6;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS5;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass5;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS4;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass4;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS3;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass3;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS2;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass2;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS1;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass1;		    RenderTarget = MotionTexNewB;}
+#else 
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeatureTriPS1;	RenderTarget = FeaturePyramidLevel1;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeatureTriPS2;	RenderTarget = FeaturePyramidLevel2;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeatureTriPS3;	RenderTarget = FeaturePyramidLevel3;}
+	pass {VertexShader = MainVS;PixelShader = DownsampleFeatureTriPS4;	RenderTarget = FeaturePyramidLevel4;}
+	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS5;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass5;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS4;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass4;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS3;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass3;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS2;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass2;		    RenderTarget = MotionTexNewB;}	
+	pass {VertexShader = MainVS;PixelShader = BlockMatchingPassPS1;	RenderTarget = MotionTexNewA;}
+	pass {VertexShader = MainVS;PixelShader = FilterPass1;		    RenderTarget = MotionTexNewB;}
 		
-	pass {VertexShader = MainVS;PixelShader = NEW_CopyToFullres;		RenderTarget = MotionTexIntermediateTex0;}
+	pass {VertexShader = MainVS;PixelShader = CopyToFullres;		RenderTarget = MotionTexIntermediateTex0;}
+#endif
+		
+	pass {VertexShader = MainVS;PixelShader = CopyToFullres;		RenderTarget = MotionTexIntermediateTex0;}
 
-	pass {VertexShader = MainVS;PixelShader = WritePrevLowresDepthPS; RenderTarget0 = DepthLowresPrev;} 
+	pass {VertexShader = MainVS;PixelShader = WritePrevLowresDepthPS; RenderTarget0 = DepthLowresPacked; RenderTargetWriteMask = 1 << 1;} 
 	pass {VertexShader = MainVS;PixelShader = WriteFeaturePS2; RenderTarget0 = FeaturePyramidLevel0; RenderTargetWriteMask = 1 << 1;}	
 
 #if LAUNCHPAD_DEBUG_OUTPUT != 0 //why waste perf for this pass in normal mode
