@@ -221,9 +221,6 @@ sampler searchLUTSampler {	Texture = searchLUT; MipFilter = POINT; MinFilter = P
 #define SMAA_CORNER_ROUNDING_NORM       (float(SMAA_CORNER_ROUNDING) / 100.0)
 #define SMAA_SEARCHTEX_SELECT(sample)   sample.r
 
-//integer divide, rounding up
-#define CEIL_DIV(num, denom) ((((num) - 1) / (denom)) + 1)
-
 struct VSOUT
 {
     float4 vpos : SV_Position;

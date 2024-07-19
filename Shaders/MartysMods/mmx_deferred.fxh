@@ -23,8 +23,8 @@
 namespace Deferred 
 {
 //normals, RG8 octahedral encoded 
-texture NormalsTex              { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16;       };
-sampler sNormalsTex             { Texture = NormalsTex; MinFilter = POINT; MipFilter = POINT; MagFilter = POINT;};
+texture NormalsTexV2              { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RGBA16;       };
+sampler sNormalsTexV2             { Texture = NormalsTexV2; MinFilter = POINT; MipFilter = POINT; MagFilter = POINT;};
 
 //motion vectors, RGBA16F, XY = delta uv, Z = confidence, W = depth because why not
 texture MotionVectorsTex        { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;     };
@@ -32,8 +32,14 @@ sampler sMotionVectorsTex       { Texture = MotionVectorsTex; };
 
 float3 get_normals(float2 uv)
 {
-    float2 encoded = tex2Dlod(sNormalsTex, uv, 0).xy;
+    float2 encoded = tex2Dlod(sNormalsTexV2, uv, 0).xy;
     return -Math::octahedral_dec(encoded); //fixes bugs in RTGI, positive z gives better precision
+}
+
+float3 get_geometry_normals(float2 uv)
+{
+    float2 encoded = tex2Dlod(sNormalsTexV2, uv, 0).zw;
+    return -Math::octahedral_dec(encoded);
 }
 
 float2 get_motion(float2 uv)

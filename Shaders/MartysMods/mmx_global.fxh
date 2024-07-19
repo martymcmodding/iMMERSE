@@ -86,6 +86,8 @@ struct PSOUT4
 //condition true selects left in ternary but right in lerp, lerp is more intuitive but produces more instructions
 //this is (the?) solution for that
 #define select(_lhs, _rhs, _cond) (_cond)?(_rhs):(_lhs)
+//quite often I need to dot a vector with itself but don't necessarily want to create a new variable for it
+#define dot2(_x) dot((_x), (_x))
 
 #define MAX3(_type) _type max3(_type a, _type b, _type c){ return max(max(a, b), c);}
 #define MAX4(_type) _type max4(_type a, _type b, _type c, _type d){ return max(max(a, b), max(c, d));}
@@ -119,3 +121,12 @@ float4 tex2Dlod(sampler s, float2 uv, float mip)
 {
     return tex2Dlod(s, float4(uv, 0, mip));
 }
+
+//log2 macro for uints up to 16 bit, inefficient in runtime but preprocessor doesn't care
+#define T1(x,n) ((uint(x)>>(n))>0)
+#define T2(x,n) (T1(x,n)+T1(x,n+1))
+#define T4(x,n) (T2(x,n)+T2(x,n+2))
+#define T8(x,n) (T4(x,n)+T4(x,n+4))
+#define LOG2(x) (T8(x,0)+T8(x,8))
+
+#define CEIL_DIV(num, denom) ((((num) - 1) / (denom)) + 1)
