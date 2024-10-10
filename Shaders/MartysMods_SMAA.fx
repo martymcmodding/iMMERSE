@@ -176,6 +176,8 @@ texture ColorInputTex : COLOR;
 texture DepthInputTex : DEPTH;
 sampler DepthInput  { Texture = DepthInputTex; };
 
+#define CEIL_DIV(num, denom) (((num - 1) / denom) + 1)
+
 #include ".\MartysMods\mmx_global.fxh"
 #include ".\MartysMods\mmx_depth.fxh"
 #include ".\MartysMods\mmx_math.fxh"
