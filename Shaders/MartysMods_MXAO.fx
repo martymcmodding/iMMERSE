@@ -185,6 +185,8 @@ sampler sAOTex2 { Texture = AOTex2; };
 
 //#undef _COMPUTE_SUPPORTED
 
+#define CEIL_DIV(num, denom) ((((num) - 1) / (denom)) + 1)
+
 #if ((BUFFER_WIDTH/4)*4) == BUFFER_WIDTH
  #define DEINTERLEAVE_HIGH       0
  #define DEINTERLEAVE_TILE_COUNT 4u
