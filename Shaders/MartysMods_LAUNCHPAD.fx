@@ -381,7 +381,6 @@ float2 update_adam(inout AdamOptimizer a, float2 grad)
 
 	float2 mhat = a.m / (1 - a.beta1decayed);
 	float vhat  = a.v / (1 - a.beta2decayed);
-
 	return a.lr * mhat / (sqrt(vhat) + a.epsilon);
 }
 
@@ -414,10 +413,12 @@ float4 gradient_block_matching(sampler s_feature, VSOUT i, int level, float4 coa
 		SAD.z += loss(f, g);
 
 		local_block[k] = g;
+		m += float2(g, g * g);
 
 	}	
 	
 	m /= blocksize;
+	float variance = abs(m.y - m.x * m.x);	
 
 	AdamOptimizer adam = init_adam();
 	float2 grad = (SAD.yz - SAD.x) / float2(deltax.x, deltay.y);
@@ -429,12 +430,20 @@ float4 gradient_block_matching(sampler s_feature, VSOUT i, int level, float4 coa
 	int num_steps = 24;
 	int did_not_improve_score = 0;
 
+	float2 local_motion_prev = local_motion;
+
 	[loop]
 	while(num_steps-- > 0 && did_not_improve_score < 2)
-	{
-		local_motion -= update_adam(adam, grad);
+	{		
+		//nesterov momentum
+		float2 curr_grad_step = update_adam(adam, grad);
+		local_motion = local_motion_prev - curr_grad_step;
+		local_motion_prev = local_motion;
+		local_motion -= curr_grad_step;//look ahead using curr gradient
+		
+		//local_motion -= update_adam(adam, grad);	
+		
 		SAD = 0;
-		m = 0;
 
 		[unroll]
 		for(uint k = 0; k < blocksize; k++)
@@ -449,9 +458,7 @@ float4 gradient_block_matching(sampler s_feature, VSOUT i, int level, float4 coa
 			f = tex2Dlod(s_feature, tuv + deltax, 0).y;
 			SAD.y += loss(f, g);
 			f = tex2Dlod(s_feature, tuv + deltay, 0).y;
-			SAD.z += loss(f, g);
-
-			m += float2(g, g * g);
+			SAD.z += loss(f, g);			
 		}
 
 		[flatten]
@@ -466,15 +473,13 @@ float4 gradient_block_matching(sampler s_feature, VSOUT i, int level, float4 coa
 			did_not_improve_score++;
 		}		
 
-		grad = (SAD.yz - SAD.x) / float2(deltax.x, deltay.y);
+		grad = (SAD.yz - SAD.x) / float2(deltax.x, deltay.y);		
 	}
 
 	local_motion = best_local_motion;
 	total_motion += local_motion;
 
-	float variance = abs(m.y - m.x * m.x);
-	m /= blocksize;
-	
+
 	best_SAD /= blocksize;
 	best_SAD /= max(0.0001, variance);
 
