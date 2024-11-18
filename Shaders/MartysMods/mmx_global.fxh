@@ -48,6 +48,38 @@ static const float2 BUFFER_PIXEL_SIZE = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIG
 static const uint2 BUFFER_SCREEN_SIZE = uint2(BUFFER_WIDTH, BUFFER_HEIGHT);
 static const float2 BUFFER_ASPECT_RATIO = float2(1.0, BUFFER_WIDTH * BUFFER_RCP_HEIGHT);
 
+//DLSS/FSR/XeSS/TAAU compatibility features
+
+#define DLSS_QUALITY           0.66666666 //    1 / 1.5
+#define DLSS_BALANCED          0.58000000 //    1 / 1.72
+#define DLSS_PERFORMANCE       0.50000000 //    1 / 2.0 
+#define DLSS_ULTRA_PERFORMANCE 0.33333333 //    1 / 3.0
+
+#define FSR_ULTRA_QUALITY      0.77000000 //    1 / 1.3
+#define FSR_QUALITY            0.66666666 //    1 / 1.5
+#define FSR_BALANCED           0.58823529 //    1 / 1.7
+#define FSR_PERFORMANCE        0.50000000 //    1 / 2.0
+
+#ifdef MARTYSMODS_TAAU_SCALE //this works with both the "enum" above and actual literals like 0.5
+
+    #define BUFFER_WIDTH_DLSS       int(BUFFER_WIDTH  * MARTYSMODS_TAAU_SCALE + 0.5)
+    #define BUFFER_HEIGHT_DLSS      int(BUFFER_HEIGHT * MARTYSMODS_DLSS_RENDER_SCALE + 0.5)
+    #define BUFFER_RCP_WIDTH_DLSS   (1.0 / (BUFFER_WIDTH_DLSS))
+    #define BUFFER_RCP_HEIGHT_DLSS  (1.0 / (BUFFER_HEIGHT_DLSS))
+
+#else  //no declarations, revert back to fullscreen definitions
+
+    #define BUFFER_WIDTH_DLSS       BUFFER_WIDTH 
+    #define BUFFER_HEIGHT_DLSS      BUFFER_HEIGHT
+    #define BUFFER_RCP_WIDTH_DLSS   BUFFER_RCP_WIDTH
+    #define BUFFER_RCP_HEIGHT_DLSS  BUFFER_RCP_HEIGHT
+
+#endif
+
+static const float2 BUFFER_PIXEL_SIZE_DLSS   = float2(BUFFER_RCP_WIDTH_DLSS, BUFFER_RCP_HEIGHT_DLSS);
+static const uint2 BUFFER_SCREEN_SIZE_DLSS   = uint2(BUFFER_WIDTH_DLSS, BUFFER_HEIGHT_DLSS);
+static const float2 BUFFER_ASPECT_RATIO_DLSS = float2(1.0, BUFFER_WIDTH_DLSS * BUFFER_RCP_HEIGHT_DLSS);
+
 void FullscreenTriangleVS(in uint id : SV_VertexID, out float4 vpos : SV_Position, out float2 uv : TEXCOORD)
 {
 	uv = id.xx == uint2(2, 1) ? 2.0.xx : 0.0.xx;  
