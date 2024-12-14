@@ -24,8 +24,6 @@
 
 ===============================================================================
 
-    MXAO v1.1
-
     Author:         Pascal Gilcher
 
     More info:      https://martysmods.com
@@ -158,58 +156,72 @@ uniform float4 tempF3 <
 //you ARE breaking things down the line, if the shader does not work without changes
 //here, it's by design.
 
+//contains a few forward definitions, need to include it here
+#include ".\MartysMods\mmx_global.fxh"
+
 texture ColorInputTex : COLOR;
 texture DepthInputTex : DEPTH;
 sampler ColorInput 	{ Texture = ColorInputTex; };
 sampler DepthInput  { Texture = DepthInputTex; };
 
-texture AOTex1 { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
-texture AOTex2 { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
+texture MXAOTex1 { Width = BUFFER_WIDTH_DLSS;   Height = BUFFER_HEIGHT_DLSS;   Format = RGBA16F;  MipLevels = 4; };
+texture MXAOTex2 { Width = BUFFER_WIDTH_DLSS;   Height = BUFFER_HEIGHT_DLSS;   Format = RGBA16F;  };
 
 #if !_COMPUTE_SUPPORTED
-texture AOTexRaw { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = RG16F;  };
-sampler sAOTexRaw { Texture = AOTexRaw;  MinFilter=POINT; MipFilter=POINT; MagFilter=POINT; };
+texture MXAOTexRaw { Width = BUFFER_WIDTH_DLSS;   Height = BUFFER_HEIGHT_DLSS;   Format = RG16F;  };
+sampler sMXAOTexRaw { Texture = MXAOTexRaw;  MinFilter=POINT; MipFilter=POINT; MagFilter=POINT; };
 #endif
 
-sampler sAOTex1 { Texture = AOTex1; };
-sampler sAOTex2 { Texture = AOTex2; };
+sampler sMXAOTex1 { Texture = MXAOTex1; };
+sampler sMXAOTex2 { Texture = MXAOTex2; };
 
-#include ".\MartysMods\mmx_global.fxh"
+texture MXAOTexTmp { Width = BUFFER_WIDTH_DLSS;   Height = BUFFER_HEIGHT_DLSS;   Format = RGBA16F;  };
+sampler sMXAOTexTmp  { Texture = MXAOTexTmp; };
+texture MXAOTexAccum { Width = BUFFER_WIDTH_DLSS;   Height = BUFFER_HEIGHT_DLSS;   Format = RGBA16F;  MipLevels = 2;};
+sampler sMXAOTexAccum  { Texture = MXAOTexAccum; };
+sampler sMXAOTexAccumPoint  { Texture = MXAOTexAccum; MinFilter=POINT; MipFilter=POINT; MagFilter=POINT;};
+
+texture RTGI_DictTex      < source = "iMMERSE_rtgi_dict.png"; > { Width = 128*10; Height = 128*3; Format = RGBA8; };
+sampler	sRTGI_DictTex     { Texture = RTGI_DictTex; AddressU = WRAP; AddressV = WRAP; };
+
 #include ".\MartysMods\mmx_depth.fxh"
 #include ".\MartysMods\mmx_math.fxh"
 #include ".\MartysMods\mmx_camera.fxh"
-
-#if MXAO_USE_LAUNCHPAD_NORMALS 
- #include ".\MartysMods\mmx_deferred.fxh"
-#endif 
+#include ".\MartysMods\mmx_deferred.fxh"
+#include ".\MartysMods\mmx_qmc.fxh"
 
 //#undef _COMPUTE_SUPPORTED
 
-#if ((BUFFER_WIDTH/4)*4) == BUFFER_WIDTH
- #define DEINTERLEAVE_HIGH       0
- #define DEINTERLEAVE_TILE_COUNT 4u
+#ifdef _MARTYSMODS_TAAU_SCALE
+    #define DEINTERLEAVE_HIGH       0
+    #define DEINTERLEAVE_TILE_COUNT 2u
 #else 
- #define DEINTERLEAVE_HIGH       1
- #define DEINTERLEAVE_TILE_COUNT 5u
+    #if ((BUFFER_WIDTH_DLSS/4)*4) == BUFFER_WIDTH_DLSS
+    #define DEINTERLEAVE_HIGH       0
+    #define DEINTERLEAVE_TILE_COUNT 4u
+    #else 
+    #define DEINTERLEAVE_HIGH       1
+    #define DEINTERLEAVE_TILE_COUNT 5u
+    #endif
 #endif
 
 uniform uint FRAMECOUNT < source = "framecount"; >;
 
 #if _COMPUTE_SUPPORTED
-storage stAOTex1       { Texture = AOTex1;        };
-storage stAOTex2       { Texture = AOTex2;        };
+storage stMXAOTex1       { Texture = MXAOTex1;        };
+storage stMXAOTex2       { Texture = MXAOTex2;        };
 
 texture3D ZSrc3D 
 { 
-    Width = BUFFER_WIDTH/DEINTERLEAVE_TILE_COUNT;   
-    Height = BUFFER_HEIGHT/DEINTERLEAVE_TILE_COUNT;   
+    Width = BUFFER_WIDTH_DLSS/DEINTERLEAVE_TILE_COUNT;   
+    Height = BUFFER_HEIGHT_DLSS/DEINTERLEAVE_TILE_COUNT;   
     Depth = DEINTERLEAVE_TILE_COUNT * DEINTERLEAVE_TILE_COUNT;   
     Format = R16F;
 };
 sampler3D sZSrc3D { Texture = ZSrc3D; MinFilter=POINT; MipFilter=POINT; MagFilter=POINT;};
 storage3D stZSrc3D { Texture = ZSrc3D; };
 #else 
-texture ZSrc { Width = BUFFER_WIDTH;   Height = BUFFER_HEIGHT;   Format = R16F; };
+texture ZSrc { Width = BUFFER_WIDTH_DLSS;   Height = BUFFER_HEIGHT_DLSS;   Format = R16F; };
 sampler sZSrc { Texture = ZSrc; MinFilter=POINT; MipFilter=POINT; MagFilter=POINT;};
 #endif
 
@@ -274,13 +286,13 @@ float2 deinterleave_uv(float2 uv)
 {
     float2 splituv = uv * DEINTERLEAVE_TILE_COUNT;
     float2 splitoffset = floor(splituv) - DEINTERLEAVE_TILE_COUNT * 0.5 + 0.5;
-    splituv = frac(splituv) + splitoffset * BUFFER_PIXEL_SIZE;
+    splituv = frac(splituv) + splitoffset * BUFFER_PIXEL_SIZE_DLSS;
     return splituv;
 }
 
 float2 reinterleave_uv(float2 uv)
 {
-    uint2 whichtile = floor(uv / BUFFER_PIXEL_SIZE) % DEINTERLEAVE_TILE_COUNT;
+    uint2 whichtile = floor(uv / BUFFER_PIXEL_SIZE_DLSS) % DEINTERLEAVE_TILE_COUNT;
     float2 newuv = uv + whichtile;
     newuv /= DEINTERLEAVE_TILE_COUNT;
     return newuv;
@@ -288,7 +300,7 @@ float2 reinterleave_uv(float2 uv)
 
 float3 get_normals(in float2 uv, out float edge_weight)
 {
-    float3 delta = float3(BUFFER_PIXEL_SIZE, 0);
+    float3 delta = float3(BUFFER_PIXEL_SIZE_DLSS, 0);
     //similar system to Intel ASSAO/AMD CACAO/XeGTAO and friends with improved weighting and less ALU
     float3 center = Camera::uv_to_proj(uv);
     float3 deltaL = Camera::uv_to_proj(uv - delta.xz) - center;
@@ -320,10 +332,18 @@ float3 get_normals(in float2 uv, out float edge_weight)
 
 float get_jitter(uint2 p)
 {
+#ifdef _MARTYSMODS_TAAU_SCALE
+    uint f = FRAMECOUNT % 30;
+    uint2 texel_in_tile = p % 128;
+    texel_in_tile.x += 128 * (f % 10);
+    texel_in_tile.y += 128 * (f / 10);
+    return tex2Dfetch(sRTGI_DictTex, texel_in_tile.xy).xy;    
+#else 
     uint tiles = DEINTERLEAVE_TILE_COUNT;
     uint jitter_idx = dot(p % tiles, uint2(1, tiles));
     jitter_idx *= DEINTERLEAVE_HIGH ? 17u : 11u;
     return ((jitter_idx % (tiles * tiles)) + 0.5) / (tiles * tiles);
+#endif
 }
 
 float get_fade_factor(float depth)
@@ -455,13 +475,13 @@ VSOUT MainVS(in uint id : SV_VertexID)
 #if _COMPUTE_SUPPORTED
 void Deinterleave3DCS(in CSIN i)
 {
-    if(!check_boundaries(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE)) return;
+    if(!check_boundaries(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE_DLSS)) return;
 
-    float2 uv = pixel_idx_to_uv(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE);
+    float2 uv = pixel_idx_to_uv(i.dispatchthreadid.xy * 2, BUFFER_SCREEN_SIZE_DLSS);
     float2 corrected_uv = Depth::correct_uv(uv); //fixed for lookup 
 
 #if RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN
-    corrected_uv.y -= BUFFER_PIXEL_SIZE.y * 0.5;    //shift upwards since gather looks down and right
+    corrected_uv.y -= BUFFER_PIXEL_SIZE_DLSS.y * 0.5;    //shift upwards since gather looks down and right
     float4 depth_texels = tex2DgatherR(DepthInput, corrected_uv).wzyx;  
 #else
     float4 depth_texels = tex2DgatherR(DepthInput, corrected_uv);
@@ -514,16 +534,17 @@ float2 MXAOFused(uint2 screenpos, float4 uv, float depth_layer)
     float3 v = normalize(-p);  
 
 #if _COMPUTE_SUPPORTED
-    static const float4 texture_scale = BUFFER_ASPECT_RATIO.xyxy;
+    static const float4 texture_scale = BUFFER_ASPECT_RATIO_DLSS.xyxy;
 #else
-    static const float4 texture_scale = float2(1.0 / DEINTERLEAVE_TILE_COUNT, 1.0).xxyy * BUFFER_ASPECT_RATIO.xyxy;
+    static const float4 texture_scale = float2(1.0 / DEINTERLEAVE_TILE_COUNT, 1.0).xxyy * BUFFER_ASPECT_RATIO_DLSS.xyxy;
 #endif
 
     uint slice_count  = samples_per_preset[MXAO_GLOBAL_SAMPLE_QUALITY_PRESET].x;    
     uint sample_count = samples_per_preset[MXAO_GLOBAL_SAMPLE_QUALITY_PRESET].y; 
 
-    float jitter = get_jitter(screenpos);    
-    float3 slice_dir = 0; sincos(jitter * PI * (6.0/slice_count), slice_dir.x, slice_dir.y);    
+    float2 jitter = get_jitter(screenpos); 
+ 
+    float3 slice_dir = 0; sincos(jitter.x * PI * (6.0/slice_count), slice_dir.x, slice_dir.y);    
     float2x2 rotslice; sincos(PI / slice_count, rotslice._21, rotslice._11); rotslice._12 = -rotslice._21; rotslice._22 = rotslice._11;    
 
     float worldspace_radius = MXAO_SAMPLE_RADIUS * 0.5;
@@ -574,7 +595,7 @@ float2 MXAOFused(uint2 screenpos, float4 uv, float depth_layer)
             [loop]         
             for(int _sample = 0; _sample < sample_count; _sample += 2)
             {
-                float2 s = (_sample + float2(0, 1) + jitter) / sample_count; s *= s;  
+                float2 s = (_sample + float2(0, 1) + jitter.y) / sample_count; s *= s;  
 
                 float4 tap_uv[2] = {uv + s.x * scaled_dir, 
                                     uv + s.y * scaled_dir};
@@ -635,14 +656,20 @@ float2 MXAOFused(uint2 screenpos, float4 uv, float depth_layer)
 #else 
     visibility /= slicesum;
 #endif
-    return float2(saturate(visibility), edge_weight > 0.5 ? -d : d);//store depth negated for pixels with low normal confidence to drive the filter
+
+    float2 res = float2(saturate(visibility), edge_weight > 0.5 ? -d : d);//store depth negated for pixels with low normal confidence to drive the filter
+
+#ifdef _MARTYSMODS_TAAU_SCALE    
+    res.y = abs(res.y); // we don't do that on the temporal filter.
+#endif
+    return res;
 }
 
 #if _COMPUTE_SUPPORTED
 void OcclusionWrap3DCS(in CSIN i)
 {    
     const uint tilecount = DEINTERLEAVE_TILE_COUNT;
-    const uint2 tilesize = BUFFER_SCREEN_SIZE / tilecount;    
+    const uint2 tilesize = BUFFER_SCREEN_SIZE_DLSS / tilecount;    
 
     uint2 tile_idx;
     tile_idx.y = i.dispatchthreadid.z / tilecount;
@@ -653,72 +680,42 @@ void OcclusionWrap3DCS(in CSIN i)
     uint2 screen_pos = i.dispatchthreadid.xy * tilecount + tile_idx;
     float4 uv;
     uv.xy = pixel_idx_to_uv(i.dispatchthreadid.xy, tilesize);
-    uv.zw = pixel_idx_to_uv(screen_pos, BUFFER_SCREEN_SIZE);    
+    uv.zw = pixel_idx_to_uv(screen_pos, BUFFER_SCREEN_SIZE_DLSS);    
 
     float depth_layer = i.dispatchthreadid.z * rcp(tilecount * tilecount);    
     float2 ao_and_guide = MXAOFused(screen_pos, uv, depth_layer);
-
-    tex2Dstore(stAOTex1, screen_pos, ao_and_guide.xyyy);
+    tex2Dstore(stMXAOTex1, screen_pos, float4(ao_and_guide.xy, ao_and_guide.xy * ao_and_guide.xy));
 }
 #else 
-void OcclusionWrap1PS(in VSOUT i, out float2 o : SV_Target0) //writes to AOTex2
+void OcclusionWrap1PS(in VSOUT i, out float4 o : SV_Target0) //writes to MXAOTex2
 {
     uint2 dispatchthreadid = floor(i.vpos.xy);
-    uint2 write_pos = reinterleave_pos(dispatchthreadid, DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE);
-    uint2 tile_idx = dispatchthreadid / CEIL_DIV(BUFFER_SCREEN_SIZE, DEINTERLEAVE_TILE_COUNT);
+    uint2 write_pos = reinterleave_pos(dispatchthreadid, DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE_DLSS);
+    uint2 tile_idx = dispatchthreadid / CEIL_DIV(BUFFER_SCREEN_SIZE_DLSS, DEINTERLEAVE_TILE_COUNT);
 
     if(shading_rate(tile_idx)) discard;   
 
     float4 uv;
-    uv.xy = pixel_idx_to_uv(dispatchthreadid, BUFFER_SCREEN_SIZE);
+    uv.xy = pixel_idx_to_uv(dispatchthreadid, BUFFER_SCREEN_SIZE_DLSS);
     //uv.zw = pixel_idx_to_uv(write_pos, BUFFER_SCREEN_SIZE);
     uv.zw = deinterleave_uv(uv.xy); //no idea why _this_ works but the other doesn't but that's just DX9 being a jackass I guess
-    o = MXAOFused(write_pos, uv, 0.0);
+    o.xy = MXAOFused(write_pos, uv, 0.0);
+    o.zw = o.xy * o.xy;
 }
 
-void OcclusionWrap2PS(in VSOUT i, out float2 o : SV_Target0) 
+void OcclusionWrap2PS(in VSOUT i, out float4 o : SV_Target0) 
 {
 	uint2 dispatchthreadid = floor(i.vpos.xy);
-    uint2 read_pos = deinterleave_pos(dispatchthreadid, DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE);
-    uint2 tile_idx = dispatchthreadid / CEIL_DIV(BUFFER_SCREEN_SIZE, DEINTERLEAVE_TILE_COUNT);
+    uint2 read_pos = deinterleave_pos(dispatchthreadid, DEINTERLEAVE_TILE_COUNT, BUFFER_SCREEN_SIZE_DLSS);
+    uint2 tile_idx = dispatchthreadid / CEIL_DIV(BUFFER_SCREEN_SIZE_DLSS, DEINTERLEAVE_TILE_COUNT);
     
-    //need to do it here again because the AO pass writes to AOTex2, which is also intermediate for filter
-    //so we only take the new texels and transfer them to AOTex1, so AOTex1 contains unfiltered, reconstructed data
+    //need to do it here again because the AO pass writes to MXAOTex2, which is also intermediate for filter
+    //so we only take the new texels and transfer them to MXAOTex1, so MXAOTex1 contains unfiltered, reconstructed data
     if(shading_rate(tile_idx)) discard;
-    o = tex2Dfetch(sAOTexRaw, read_pos).xy;    
+    o = tex2Dfetch(sMXAOTexRaw, read_pos);    
 }
 #endif
-/*
-float2 filter_crossbilateral(float2 uv, sampler sAO, int iter)
-{
-    float2 center = tex2Dlod(sAO, uv, 0).xy;
-    float2 axis = float2(iter, !iter) * BUFFER_PIXEL_SIZE;
 
-    int k = 5;
-    float sigma = (k + 1.0) * 0.5;
-    float falloff = rcp(2 * sigma * sigma);
-
-    float4 mv = float4(center.y, center.y * center.y, center.x, center.x * center.y);
-    float wsum = 1;
-
-    [unroll]
-    for(int j = 1; j < k; j++)
-    {      
-        float2 tap = tex2Dlod(sAO, uv + axis * j, 0).xy;
-        float w = exp2(-j*j*falloff);
-        mv += float4(tap.y, tap.y * tap.y, tap.x, tap.x * tap.y) * w;     
-        tap = tex2Dlod(sAO, uv - axis * j, 0).xy;   
-        mv += float4(tap.y, tap.y * tap.y, tap.x, tap.x * tap.y) * w;
-        wsum += 2.0 * w;
-    }
-
-    mv /= wsum;
-
-    float b = (mv.w - mv.x * mv.z) / max(mv.y - mv.x * mv.x, exp2(-28));
-    float a = mv.z - b * mv.x;
-    return float2(saturate(b * center.y + a), center.y);
-}
-*/
 //todo add direct sample method for DX9
 float2 filter(float2 uv, sampler sAO, int iter)
 { 
@@ -727,20 +724,20 @@ float2 filter(float2 uv, sampler sAO, int iter)
     float flip = iter ? -1 : 1;
 
     float4 ao, depth, mv;
-    ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(-0.5, -0.5));
-    depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(-0.5, -0.5))); //abs because sign flip for edge pixels!
+    ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE_DLSS * float2(-0.5, -0.5));
+    depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE_DLSS * float2(-0.5, -0.5))); //abs because sign flip for edge pixels!
     mv = float4(dot(depth, 1), dot(depth, depth), dot(ao, 1), dot(ao, depth));
 
-    ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(1.5, -0.5));
-    depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(1.5, -0.5)));
+    ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE_DLSS * float2(1.5, -0.5));
+    depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE_DLSS * float2(1.5, -0.5)));
     mv += float4(dot(depth, 1), dot(depth, depth), dot(ao, 1), dot(ao, depth));
 
-    ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(-0.5, 1.5));
-    depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(-0.5, 1.5)));
+    ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE_DLSS * float2(-0.5, 1.5));
+    depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE_DLSS * float2(-0.5, 1.5)));
     mv += float4(dot(depth, 1), dot(depth, depth), dot(ao, 1), dot(ao, depth));
     
     ao = tex2DgatherR(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(1.5, 1.5));
-    depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE * float2(1.5, 1.5)));
+    depth = abs(tex2DgatherG(sAO, uv + flip * BUFFER_PIXEL_SIZE_DLSS * float2(1.5, 1.5)));
     mv += float4(dot(depth, 1), dot(depth, depth), dot(ao, 1), dot(ao, depth));
 
     mv /= 16.0;
@@ -753,21 +750,134 @@ float2 filter(float2 uv, sampler sAO, int iter)
 void Filter1PS(in VSOUT i, out float2 o : SV_Target0)
 {    
     if(MXAO_FILTER_SIZE < 2) discard;
-    o = filter(i.uv, sAOTex1, 0);
+    o = filter(i.uv, sMXAOTex1, 0);
 }
+
+#ifdef _MARTYSMODS_TAAU_SCALE
+
+float4 bilinear_split(float2 uv, float2 texsize)
+{
+    return float4(floor(uv * texsize - 0.5), frac(uv * texsize - 0.5));
+}
+
+float4 get_bilinear_weights(float4 bilinear)
+{
+    float4 w = float4(bilinear.zw, 1 - bilinear.zw);
+    return w.zxzx * w.wwyy;
+}
+
+void TemporalBlendPS(in VSOUT i, out float4 o : SV_Target0)
+{
+    float2 prev_uv = i.uv + Deferred::get_motion(i.uv);
+    float2 curr_ao = tex2D(sMXAOTex1, i.uv).xy;
+    float depth = abs(curr_ao.y);
+
+    bool valid_repro = Math::inside_screen(prev_uv);
+
+    float2 prev_ao = 0;
+
+    if(valid_repro)
+    {
+        float4 kernel = bilinear_split(prev_uv, BUFFER_SCREEN_SIZE_DLSS);
+        float4 kernel_ao;//    = tex2DgatherR(sMXAOTexAccum, prev_uv).wzxy;
+        float4 kernel_depth;// = abs(tex2DgatherG(sMXAOTexAccum, prev_uv).wzxy);
+
+        kernel_ao.x = tex2Dfetch(sMXAOTexAccum, int2(kernel.xy) + int2(0, 0)).x;
+        kernel_ao.y = tex2Dfetch(sMXAOTexAccum, int2(kernel.xy) + int2(1, 0)).x;
+        kernel_ao.z = tex2Dfetch(sMXAOTexAccum, int2(kernel.xy) + int2(0, 1)).x;
+        kernel_ao.w = tex2Dfetch(sMXAOTexAccum, int2(kernel.xy) + int2(1, 1)).x;
+
+        kernel_depth.x = tex2Dfetch(sMXAOTexAccum, int2(kernel.xy) + int2(0, 0)).y;
+        kernel_depth.y = tex2Dfetch(sMXAOTexAccum, int2(kernel.xy) + int2(1, 0)).y;
+        kernel_depth.z = tex2Dfetch(sMXAOTexAccum, int2(kernel.xy) + int2(0, 1)).y;
+        kernel_depth.w = tex2Dfetch(sMXAOTexAccum, int2(kernel.xy) + int2(1, 1)).y;
+
+        //XY
+        //ZW
+        float4 w_bilinear  = float4((1 - kernel.z) * (1-kernel.w),  kernel.z * (1-kernel.w), (1-kernel.z) * kernel.w, kernel.z * kernel.w);//get_bilinear_weights(kernel);
+        float4 w_bilateral = exp2(-abs(kernel_depth - depth) / (depth + 1e-6));
+        float4 w = w_bilinear * w_bilateral;
+        w += 0.001;
+        w /= dot(w, 1);
+        prev_ao.x = dot(kernel_ao, w);
+        prev_ao.y = dot(kernel_depth, w);
+    }    
+
+    int mip_curr = 3;
+    int mip_prev = 1;
+
+    float2 m_curr;  
+    m_curr  = tex2Dlod(sMXAOTex1, i.uv + float2(-0.5, -0.5) * BUFFER_PIXEL_SIZE_DLSS * exp2(mip_curr), mip_curr).xz;
+    m_curr += tex2Dlod(sMXAOTex1, i.uv + float2( 0.5, -0.5) * BUFFER_PIXEL_SIZE_DLSS * exp2(mip_curr), mip_curr).xz;
+    m_curr += tex2Dlod(sMXAOTex1, i.uv + float2(-0.5,  0.5) * BUFFER_PIXEL_SIZE_DLSS * exp2(mip_curr), mip_curr).xz;
+    m_curr += tex2Dlod(sMXAOTex1, i.uv + float2( 0.5,  0.5) * BUFFER_PIXEL_SIZE_DLSS * exp2(mip_curr), mip_curr).xz;
+    m_curr *= 0.25;  
+
+    float2 m_prev;
+    m_prev  = tex2Dlod(sMXAOTexAccum, prev_uv + float2(-0.5, -0.5) * BUFFER_PIXEL_SIZE_DLSS * exp2(mip_prev), mip_prev).xz;
+    m_prev += tex2Dlod(sMXAOTexAccum, prev_uv + float2( 0.5, -0.5) * BUFFER_PIXEL_SIZE_DLSS * exp2(mip_prev), mip_prev).xz;
+    m_prev += tex2Dlod(sMXAOTexAccum, prev_uv + float2(-0.5,  0.5) * BUFFER_PIXEL_SIZE_DLSS * exp2(mip_prev), mip_prev).xz;
+    m_prev += tex2Dlod(sMXAOTexAccum, prev_uv + float2( 0.5,  0.5) * BUFFER_PIXEL_SIZE_DLSS * exp2(mip_prev), mip_prev).xz;
+    m_prev *= 0.25;
+
+    float bias = abs(m_curr.x - m_prev.x);
+    float sigma2_x = max(1e-8, m_prev.y - m_prev.x * m_prev.x);
+    float sigma2_y = max(1e-8, m_curr.y - m_curr.x * m_curr.x);
+    float denom = sigma2_x + sigma2_y + bias * bias + 1e-8;
+    float interpolant = saturate(1 - sigma2_y / denom);
+    interpolant = clamp(interpolant*0.5, 0.02, 0.5);
+    interpolant = valid_repro ? interpolant : 1;
+    o.x = lerp(prev_ao.x, curr_ao.x, interpolant);
+    o.y = lerp(prev_ao.y, depth, interpolant);    
+    o.z = o.x * o.x; //store second moment for spatial estimation
+    o.w = 1;
+}
+
+void TemporalUpdatePS(in VSOUT i, out float4 o : SV_Target0)
+{
+    o = tex2Dfetch(sMXAOTexTmp, i.vpos.xy);
+}
+
+#endif //_MARTYSMODS_TAAU_SCALE
 
 void Filter2PS(in VSOUT i, out float3 o : SV_Target0)
 {    
     float2 t;
+#ifndef _MARTYSMODS_TAAU_SCALE
     [branch]
     if(MXAO_FILTER_SIZE == 2)
-        t = filter(i.uv, sAOTex2, 1);
+        t = filter(i.uv, sMXAOTex2, 1);
     else if(MXAO_FILTER_SIZE == 1)
-        t = filter(i.uv, sAOTex1, 1);
+        t = filter(i.uv, sMXAOTex1, 1);
     else 
-        t = tex2Dlod(sAOTex1, i.uv, 0).xy;
+        t = tex2Dlod(sMXAOTex1, i.uv, 0).xy;
+#else //_MARTYSMODS_TAAU_SCALE   
+    float4 moments = 0;
+    float ws = 0;
+    for (int x = -2; x <= 2; x++)  
+    for (int y = -2; y <= 2; y++) 
+    {
+        float2 offs = float2(x, y);
+        float4 t = tex2Doffset(sMXAOTexAccumPoint, i.uv, int2(x, y)); // + offs * BUFFER_PIXEL_SIZE_DLSS);
+        float w = exp(-0.5 * dot(offs, offs) / (0.7*0.7));
+        //moments += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+        ws += w;
+        t.y = sqrt(t.y);
+        moments.x += t.y * w;
+        moments.y += t.y * t.y * w;
+        moments.z += t.y * t.x * w;
+        moments.w += t.x * w;
+    }
 
-    float mxao = t.x, d = abs(t.y);  //abs because sign flip for edge pixels!
+    moments /= ws;
+    float A = (moments.z - moments.x * moments.w) / (max(moments.y - moments.x * moments.x, 0.0) + exp(-16.0));
+    float B = moments.w - A * moments.x;        
+    float depth = tex2D(sMXAOTexAccum, i.uv).y;//
+    t.x = saturate(A * sqrt(depth) + B);
+    t.y = depth;
+#endif //_MARTYSMODS_TAAU_SCALE   
+
+    float mxao = t.x, d = abs(t.y);  //abs because sign flip for edge pixels!    
 
     mxao = lerp(1, mxao, saturate(MXAO_SSAO_AMOUNT)); 
     if(MXAO_SSAO_AMOUNT > 1) mxao = lerp(mxao, mxao * mxao, saturate(MXAO_SSAO_AMOUNT - 1)); //if someone _MUST_ use a higher intensity, switch to gamma
@@ -810,21 +920,28 @@ technique MartysMods_MXAO
     pass 
     { 
         ComputeShader = Deinterleave3DCS<32, 32>;
-        DispatchSizeX = CEIL_DIV(BUFFER_WIDTH, 64); 
-        DispatchSizeY = CEIL_DIV(BUFFER_HEIGHT, 64);
+        DispatchSizeX = CEIL_DIV(BUFFER_WIDTH_DLSS, 64); 
+        DispatchSizeY = CEIL_DIV(BUFFER_HEIGHT_DLSS, 64);
     }
     pass 
     { 
         ComputeShader = OcclusionWrap3DCS<16, 16, 1>;
-        DispatchSizeX = CEIL_DIV((BUFFER_WIDTH/DEINTERLEAVE_TILE_COUNT), 16); 
-        DispatchSizeY = CEIL_DIV((BUFFER_HEIGHT/DEINTERLEAVE_TILE_COUNT), 16);
+        DispatchSizeX = CEIL_DIV((BUFFER_WIDTH_DLSS/DEINTERLEAVE_TILE_COUNT), 16); 
+        DispatchSizeY = CEIL_DIV((BUFFER_HEIGHT_DLSS/DEINTERLEAVE_TILE_COUNT), 16);
         DispatchSizeZ = DEINTERLEAVE_TILE_COUNT * DEINTERLEAVE_TILE_COUNT;
     }
 #else 
     pass { VertexShader = MainVS; PixelShader = DepthInterleavePS; RenderTarget = ZSrc; }
-    pass { VertexShader = MainVS; PixelShader = OcclusionWrap1PS;  RenderTarget = AOTexRaw; }
-    pass { VertexShader = MainVS; PixelShader = OcclusionWrap2PS;  RenderTarget = AOTex1; }
+    pass { VertexShader = MainVS; PixelShader = OcclusionWrap1PS;  RenderTarget = MXAOTexRaw; }
+    pass { VertexShader = MainVS; PixelShader = OcclusionWrap2PS;  RenderTarget = MXAOTex1; }
 #endif
-    pass { VertexShader = MainVS; PixelShader = Filter1PS; RenderTarget = AOTex2; }
+
+#ifdef _MARTYSMODS_TAAU_SCALE
+    pass { VertexShader = MainVS; PixelShader = TemporalBlendPS; RenderTarget = MXAOTexTmp; }
+    pass { VertexShader = MainVS; PixelShader = TemporalUpdatePS; RenderTarget = MXAOTexAccum; }
+#else//_MARTYSMODS_TAAU_SCALE
+    pass { VertexShader = MainVS; PixelShader = Filter1PS; RenderTarget = MXAOTex2; }
+#endif//_MARTYSMODS_TAAU_SCALE
+
     pass { VertexShader = MainVS; PixelShader = Filter2PS; }
 }

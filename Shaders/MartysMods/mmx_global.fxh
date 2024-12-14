@@ -60,14 +60,16 @@ static const float2 BUFFER_ASPECT_RATIO = float2(1.0, BUFFER_WIDTH * BUFFER_RCP_
 #define FSR_BALANCED           0.58823529 //    1 / 1.7
 #define FSR_PERFORMANCE        0.50000000 //    1 / 2.0
 
-#ifdef MARTYSMODS_TAAU_SCALE //this works with both the "enum" above and actual literals like 0.5
-
-    #define BUFFER_WIDTH_DLSS       int(BUFFER_WIDTH  * MARTYSMODS_TAAU_SCALE + 0.5)
-    #define BUFFER_HEIGHT_DLSS      int(BUFFER_HEIGHT * MARTYSMODS_DLSS_RENDER_SCALE + 0.5)
+//if we write it this way instead of ifdef, ReShade won't add this to the GUI
+#ifdef _MARTYSMODS_TAAU_SCALE //this works with both the "enum" above and actual literals like 0.5
+       
+    //use the shit we have
+    #define BUFFER_WIDTH_DLSS       int(BUFFER_WIDTH  * _MARTYSMODS_TAAU_SCALE + 0.5)
+    #define BUFFER_HEIGHT_DLSS      int(BUFFER_HEIGHT * _MARTYSMODS_TAAU_SCALE + 0.5)
     #define BUFFER_RCP_WIDTH_DLSS   (1.0 / (BUFFER_WIDTH_DLSS))
-    #define BUFFER_RCP_HEIGHT_DLSS  (1.0 / (BUFFER_HEIGHT_DLSS))
+    #define BUFFER_RCP_HEIGHT_DLSS  (1.0 / (BUFFER_HEIGHT_DLSS))   
 
-#else  //no declarations, revert back to fullscreen definitions
+#else 
 
     #define BUFFER_WIDTH_DLSS       BUFFER_WIDTH 
     #define BUFFER_HEIGHT_DLSS      BUFFER_HEIGHT

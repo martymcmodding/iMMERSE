@@ -69,20 +69,6 @@ void fft_radix2(bool forward, inout float2 z0, inout float2 z1)
     z1 = z0 - z1 - z1;
 }
 
-void fft_radix3(bool forward, inout float2 z[3])
-{    
-    float4 tw;
-    tw.xy = float2(-0.5, 0.5 * sqrt(3.0));
-    tw.zw = complex_conj(tw.xy);
-    tw = forward ? tw : tw.zwxy;
-
-    float2 zt0 = z[0] + z[1] + z[2];
-    float2 zt1 = z[0] + complex_mul(tw.xy, z[1]) + complex_mul(tw.zw, z[2]);
-    z[2] = z[0] + complex_mul(tw.zw, z[1]) + complex_mul(tw.xy, z[2]);
-    z[1] = zt1;
-    z[0] = zt0;    
-}
-
 void fft_radix4(bool forward, inout float2 z[4])
 {    
     fft_radix2(forward, z[0], z[2]);
@@ -139,8 +125,6 @@ void fft_radix(bool forward, inout float2 z[FFT_RADIX])
 {
 #if FFT_RADIX == 2
     fft_radix2(forward, z[0], z[1]);
-#elif FFT_RADIX == 3
-    fft_radix3(forward, z);
 #elif FFT_RADIX == 4
     fft_radix4(forward, z);
 #else 
@@ -150,7 +134,7 @@ void fft_radix(bool forward, inout float2 z[FFT_RADIX])
 
 groupshared float2 tgsm[FFT_WORKING_SIZE];
 
-void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
+void FFTPass(uint2 dtid, uint threadid, sampler s_in, storage s_out, bool forward)
 {
     static const uint group_size = FFT_WORKING_SIZE / FFT_RADIX; 
     float2 local[FFT_RADIX];
@@ -165,7 +149,7 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
 #else 
         uint2 p = uint2(dtid.x, threadid + j * group_size);  
 #endif
-        float4 rcrc = tex2Dfetch(s_working, p);       
+        float4 rcrc = tex2Dfetch(s_in, p);      
         local[j] = rcrc.xy;
 #if FFT_CHANNELS == 4 
         local2[j] = rcrc.zw;
@@ -173,22 +157,19 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
     }
 
     uint k = 0;
-    [loop]
+    [unroll]
     for(uint n = 1; n < group_size;)
     {
-        //fft on local array
-        fft_radix(forward, local);
-#if FFT_CHANNELS == 4 
-        fft_radix(forward, local2);
-#endif
         //transpose with shared mem and fetch next batch
         uint curr_lane = k + (threadid - k) * FFT_RADIX;
 
+        fft_radix(forward, local);
         [loop]for(uint j = 0; j < FFT_RADIX; j++) tgsm[curr_lane + j * n] = local[j];
         barrier();
         [loop]for(uint j = 0; j < FFT_RADIX; j++) local[j] = tgsm[threadid + j * group_size];
         barrier();
 #if FFT_CHANNELS == 4 
+        fft_radix(forward, local2);
         [loop]for(uint j = 0; j < FFT_RADIX; j++) tgsm[curr_lane + j * n] = local2[j];
         barrier();
         [loop]for(uint j = 0; j < FFT_RADIX; j++) local2[j] = tgsm[threadid + j * group_size];
@@ -203,7 +184,7 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
         tw = forward ? tw : complex_conj(tw); 
         float2 tw_curr = tw;       
         
-        [loop]for(uint j = 1; j < FFT_RADIX; j++)
+        [unroll]for(uint j = 1; j < FFT_RADIX; j++)
         {
             local[j] = complex_mul(tw_curr, local[j]);
 #if FFT_CHANNELS == 4 
@@ -218,6 +199,7 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
 #if FFT_CHANNELS == 4 
     fft_radix(forward, local2);
 #endif
+
     [loop]for(uint j = 0; j < FFT_RADIX; j++)
     {
 #if FFT_CHANNELS == 4 
@@ -230,7 +212,7 @@ void FFTPass(uint2 dtid, uint threadid, storage s_working, bool forward)
 #else 
         uint2 p = uint2(dtid.x, threadid + j * group_size);  
 #endif
-        tex2Dstore(s_working, p, result * rsqrt(FFT_WORKING_SIZE));
+        tex2Dstore(s_out, p, result * rsqrt(FFT_WORKING_SIZE));
     }         
 }
 }
