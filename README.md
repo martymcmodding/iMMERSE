@@ -3,7 +3,7 @@
 
 Advanced post processing shaders for ReShade
 
-![Title](https://abload.de/img/mxao_titleimgomfqw.jpg)
+![Title](https://www.martysmods.com/media/MXAO_titleimg.jpg)
 
 # OVERVIEW
 
@@ -23,34 +23,27 @@ Make sure to at least enable iMMERSE LAUNCHPAD and move it to the very top of th
 
 These effects are currently included in iMMERSE:
 
-## iMMERSE MXAO 
+## [iMMERSE MXAO](https://www.martysmods.com/mxao/)
+![MXAO title](https://www.martysmods.com/media/MXAO.webp)
 
 iMMERSE MXAO is the successor of the qUINT MXAO effect, delivering high quality SSAO for video games. It uses the state of the art Ground Truth Ambient Occlusion algorithm by [\[Jimenez et al., 2016\]](https://www.activision.com/cdn/research/Practical_Real_Time_Strategies_for_Accurate_Indirect_Occlusion_NEW%20VERSION_COLOR.pdf) and as of recent, [Screen Space Indirect Lighting with Visibility Bitmask](https://www.researchgate.net/publication/365320847_Screen_space_indirect_lighting_with_visibility_bitmask) which is as close to ray traced reference as it gets - and improves upon them. MXAO contains a better horizon falloff term than baseline GTAO and unlike the visibility bitmasks accounts for the cosine term which makes it radiometrically correct. 
 
 Lots of microoptimization, cache aware sampling and an extremely efficient filter make it faster than reference implementations such as XeGTAO. As a result, it should be one of the most advanced SSAO implementations that exist.
 
-![MXAO modes](https://abload.de/img/mxao_aotypepmcw1.jpg)
-
-0 = GTAO
-1 = GTAO (solid angle)
-2 = Visibility Bitmask
-3 = Visibility Bitmask (solid angle)
-
 ## iMMERSE Anti Aliasing
+![AA title](https://www.martysmods.com/media/SMAA-1.webp)
 
 iMMERSE Anti Aliasing is a modified SMAA with many optimizations for current-gen hardware. Apart from microoptimizations yielding a performance boost of about 15% over baseline, on compute enabled platforms it can be twice as fast. iMMERSE AA makes heavy use of performance tricks such as thread reordering to reduce divergence and maximize occupancy, emulated wave operations to prevent single threads from stalling and more.
 
-![SMAA Performance Table](https://abload.de/img/smaa4ocdu.png)
-
 It is designed to not alter the visual output compared to regular SMAA, i.e. these optimizations do not come at the cost of reduced visual quality.
 
-## iMMERSE Launchpad
+## [iMMERSE Launchpad](https://www.martysmods.com/launchpad/)
+![LP title](https://www.martysmods.com/media/Launchpad-2.webp)
 
 iMMERSE Launchpad is a prepass for several of the iMMERSE and iMMERSE Pro effects. As many depth depending effects (such as RTGI) require normal vectors and optical flow vectors for temporal reprojection and it is detrimental to performance to regenerate this data for every shader, Launchpad is designed as a one-off solution for this task. Enable it and move it to the very top of the shader list, then never worry about it again. Its motion estimation algorithm is inspired by Jak0bW's groundbreaking [Dense ReShade Motion Estimation](https://github.com/JakobPCoder/ReshadeMotionEstimation).
 
-![Launchpad debug output](https://abload.de/img/desktopscreenshot2023wqfdz.png)
-
 ## iMMERSE Sharpen
+![Sh title](https://www.martysmods.com/media/Sharpen-1.webp)
 
 iMMERSE Sharpen is a depth-aware sharpening filter that leverages both depth and color to increase local contrast in desired areas, while avoiding many common artifacts usually found in sharpen algorithms, such as haloing around objects.
 
