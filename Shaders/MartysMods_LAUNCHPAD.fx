@@ -185,7 +185,6 @@ sampler DepthInput  { Texture = DepthInputTex; };
 #include ".\MartysMods\mmx_global.fxh"
 #include ".\MartysMods\mmx_depth.fxh"
 #include ".\MartysMods\mmx_math.fxh"
-#include ".\MartysMods\mmx_qmc.fxh"
 #include ".\MartysMods\mmx_camera.fxh"
 #include ".\MartysMods\mmx_deferred.fxh"
 #include ".\MartysMods\mmx_texture.fxh"
@@ -371,7 +370,7 @@ float3 showmotion(float2 motion)
 	return lerp(0.5, rgb, saturate(log(1 + dist * 3000.0 / FRAMETIME )));//normalize by frametime such that we don't need to adjust visualization intensity all the time
 }
 
-float3 inferno_quintic( float x )
+float3 inferno_quintic(float x)
 {
 	x = saturate( x );
 	float4 x1 = float4( 1.0, x, x * x, x * x * x ); // 1 x x2 x3
@@ -692,7 +691,7 @@ float4 calc_flow(VSOUT i,
 	return curr_layer;
 }
 
-void FilterFlowPS(in VSOUT i, out float4 o : SV_Target0){o = filter_flow(i, sMotionTexNewB);}
+void FilterFlowPS(in VSOUT i, out float4 o : SV_Target0){o = filter_flow(i, sMotionTexNewB, 3, 3);}
 void BlockMatchingPassNewPS7(in VSOUT i, out float4 o : SV_Target0){o = calc_flow(i, sFlowFeaturesCurrL7, sFlowFeaturesPrevL7, sMotionTexNewA, 7, 10);}
 void BlockMatchingPassNewPS6(in VSOUT i, out float4 o : SV_Target0){o = calc_flow(i, sFlowFeaturesCurrL6, sFlowFeaturesPrevL6, sMotionTexNewA, 6, 10);}
 void BlockMatchingPassNewPS5(in VSOUT i, out float4 o : SV_Target0){o = calc_flow(i, sFlowFeaturesCurrL5, sFlowFeaturesPrevL5, sMotionTexNewA, 5, 10);}
@@ -1050,14 +1049,28 @@ float3 AgX_to_srgb(float3 AgX)
     return mul(fromagx, AgX);            
 }
 
-#define degamma(_v) ((_v)*0.283799*((2.52405+(_v))*(_v)))
-#define regamma(_v) (1.14374*(-0.126893*(_v)+sqrt(_v)))
+float3 cone_overlap(float3 c)
+{
+    float k = 0.99 * 0.33;
+    float2 f = float2(1 - 2 * k, k);
+    float3x3 m = float3x3(f.xyy, f.yxy, f.yyx);
+    return mul(c, m);
+}
+
+float3 cone_overlap_inv(float3 c)
+{
+    float k = 0.99 * 0.33;
+    float2 f = float2(k - 1, k) * rcp(3 * k - 1);
+    float3x3 m = float3x3(f.xyy, f.yxy, f.yyx);
+    return mul(c, m);
+}
 
 float3 unpack_hdr_rtgi(float3 color)
 {
-    color  = saturate(color);   
-    color = degamma(color);
-    color = srgb_to_AgX(color);
+    color  = saturate(color);
+    color = cone_overlap(color);
+    color = color*0.283799*((2.52405+color)*color);    
+    //color = srgb_to_AgX(color);
     color = color * rcp(1.04 - saturate(color));    
     return color;
 }
@@ -1065,9 +1078,10 @@ float3 unpack_hdr_rtgi(float3 color)
 float3 pack_hdr_rtgi(float3 color)
 {
     color =  1.04 * color * rcp(color + 1.0);   
-    color = AgX_to_srgb(color);    
+    //color = AgX_to_srgb(color);    
     color  = saturate(color);
-    color = regamma(color);
+    color = 1.14374*(-0.126893*color+sqrt(color));
+    color = cone_overlap_inv(color);
     return color;     
 }
 
@@ -1083,9 +1097,9 @@ float3 hdr_to_sdr(float3 c)
 
 float get_sdr_luma(float3 c)
 {
-    c = degamma(c);
+    c = c*0.283799*((2.52405+c)*c);   
     float lum = dot(c, float3(0.2125, 0.7154, 0.0721));
-    lum = regamma(lum);
+    lum = 1.14374*(-0.126893*(lum)+sqrt(lum));
     return lum;
 }
 

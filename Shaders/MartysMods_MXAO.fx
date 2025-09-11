@@ -544,7 +544,6 @@ float2 MXAOFused(uint2 screenpos, float4 uv)
 
         float2 maxhorizoncos = sin(normal_angle); maxhorizoncos.y = -maxhorizoncos.y; //cos(normal_angle -+ pi/2)  
         bitfield_init();
-
         [unroll]
         for(int side = 0; side < 2; side++)
         {            
@@ -590,7 +589,7 @@ float2 MXAOFused(uint2 screenpos, float4 uv)
                     //if(tempF1.y > 0) h_frontback = saturate(h_frontback + QMC::roberts1(slice_count * sample_count + _sample, jitter.y) / 32.0);
 #endif                   
                     process_horizons(h_frontback);
-#endif  //MXAO_AO_TYPE        
+#endif  //MXAO_AO_TYPE
                 }              
             }
             scaled_dir = -scaled_dir; //unroll kills that :)                                  
@@ -606,7 +605,7 @@ float2 MXAOFused(uint2 screenpos, float4 uv)
         slicesum += sliceweight;
 #else
         visibility += integrate_sectors() * sliceweight;
-        slicesum += sliceweight;         
+        slicesum += sliceweight;        
 #endif
     }
 
@@ -716,6 +715,7 @@ float2 filter(float2 uv, sampler sAO, int iter)
 
 void Filter1PS(in VSOUT i, out float2 o : SV_Target0)
 {    
+    o = 0; //need that for discard and performance mode apparently, a PS that always discards doesn't work?
     if(MXAO_FILTER_SIZE < 2) discard;
     o = filter(i.uv, sMXAOTex1, 0);
 }
