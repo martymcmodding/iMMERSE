@@ -44,9 +44,9 @@ float2 proj_to_uv(float3 pos)
 {
     //optimized math to simplify matrix mul
     //using TAAU ratios here since we're most likely to use the actual depth buffer data here.
-    static const float3 uvtoprojADD = float3(-tan(radians(_MARTYSMODS_GLOBAL_FOV) * 0.5).xx, 1.0) * BUFFER_ASPECT_RATIO_DLSS.yxx;
-    static const float3 uvtoprojMUL = float3(-2.0 * uvtoprojADD.xy, 0.0);
-    static const float4 projtouv    = float4(rcp(uvtoprojMUL.xy), -rcp(uvtoprojMUL.xy) * uvtoprojADD.xy); 
+    static const float2 uvtoprojADD = -tan(radians(_MARTYSMODS_GLOBAL_FOV) * 0.5) * BUFFER_ASPECT_RATIO_DLSS.yx;
+    static const float2 uvtoprojMUL = -2.0 * uvtoprojADD;
+    static const float4 projtouv    = float4(rcp(uvtoprojMUL), -rcp(uvtoprojMUL) * uvtoprojADD); 
     return (pos.xy / pos.z) * projtouv.xy + projtouv.zw;          
 }
 
@@ -54,10 +54,9 @@ float3 uv_to_proj(float2 uv, float z)
 {
     //optimized math to simplify matrix mul
     //using TAAU ratios here since we're most likely to use the actual depth buffer data here.
-    static const float3 uvtoprojADD = float3(-tan(radians(_MARTYSMODS_GLOBAL_FOV) * 0.5).xx, 1.0) * BUFFER_ASPECT_RATIO_DLSS.yxx;
-    static const float3 uvtoprojMUL = float3(-2.0 * uvtoprojADD.xy, 0.0);
-    static const float4 projtouv    = float4(rcp(uvtoprojMUL.xy), -rcp(uvtoprojMUL.xy) * uvtoprojADD.xy); 
-    return (uv.xyx * uvtoprojMUL + uvtoprojADD) * z;
+    static const float2 uvtoprojADD = -tan(radians(_MARTYSMODS_GLOBAL_FOV) * 0.5) * BUFFER_ASPECT_RATIO_DLSS.yx;
+    static const float2 uvtoprojMUL = -2.0 * uvtoprojADD;
+    return float3((uv * uvtoprojMUL + uvtoprojADD) * z, z);
 }
 
 float3 uv_to_proj(float2 uv)

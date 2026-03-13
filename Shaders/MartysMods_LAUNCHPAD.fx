@@ -203,7 +203,7 @@ texture MotionTexUpscale2   { Width = BUFFER_WIDTH >> 1;   Height = BUFFER_HEIGH
 sampler sMotionTexUpscale2  { Texture = MotionTexUpscale2;  MipFilter=POINT; MagFilter=POINT; MinFilter=POINT; };
 
 //Yes I know you like to optimize blue noise away in favor for some shitty PRNG function, don't.
-texture BlueNoiseJitterTex     < source = "iMMERSE_bluenoise.png"; > { Width = 256; Height = 256; Format = RGBA8; };
+texture BlueNoiseJitterTex     < source = "iMMERSE_bluenoise_opt.png"; > { Width = 256; Height = 256; Format = RGBA8; };
 sampler	sBlueNoiseJitterTex   { Texture = BlueNoiseJitterTex; AddressU = WRAP; AddressV = WRAP; };
 
 texture FlowFeaturesCurrL0   { Width = BUFFER_WIDTH >> 0;   Height = BUFFER_HEIGHT >> 0;   Format = R16F;};
@@ -435,6 +435,28 @@ void WritePrevDepthMipPS(in VSOUT i, out float o : SV_Target0)
 
 void downsample_features(sampler s0, sampler s1, float2 uv, out float f0, out float f1)
 {
+#if 1
+	float2 tx = rcp(tex2Dsize(s0));
+	f0 = f1 = 0;
+	f0 += tex2Dlod(s0, uv + float2(-1.90313, -1.90313) * tx, 0).x * 0.083411; 
+	f0 += tex2Dlod(s0, uv + float2(       0, -1.90313) * tx, 0).x * 0.121987; 
+	f0 += tex2Dlod(s0, uv + float2( 1.90313, -1.90313) * tx, 0).x * 0.083411; 
+	f0 += tex2Dlod(s0, uv + float2(-1.90313,        0) * tx, 0).x * 0.121987; 
+	f0 += tex2Dlod(s0, uv + float2(       0,        0) * tx, 0).x * 0.178404; 
+	f0 += tex2Dlod(s0, uv + float2( 1.90313,        0) * tx, 0).x * 0.121987; 
+	f0 += tex2Dlod(s0, uv + float2(-1.90313,  1.90313) * tx, 0).x * 0.083411; 
+	f0 += tex2Dlod(s0, uv + float2(       0,  1.90313) * tx, 0).x * 0.121987; 
+	f0 += tex2Dlod(s0, uv + float2( 1.90313,  1.90313) * tx, 0).x * 0.083411;
+	f1 += tex2Dlod(s1, uv + float2(-1.90313, -1.90313) * tx, 0).x * 0.083411; 
+	f1 += tex2Dlod(s1, uv + float2(       0, -1.90313) * tx, 0).x * 0.121987; 
+	f1 += tex2Dlod(s1, uv + float2( 1.90313, -1.90313) * tx, 0).x * 0.083411; 
+	f1 += tex2Dlod(s1, uv + float2(-1.90313,        0) * tx, 0).x * 0.121987; 
+	f1 += tex2Dlod(s1, uv + float2(       0,        0) * tx, 0).x * 0.178404; 
+	f1 += tex2Dlod(s1, uv + float2( 1.90313,        0) * tx, 0).x * 0.121987; 
+	f1 += tex2Dlod(s1, uv + float2(-1.90313,  1.90313) * tx, 0).x * 0.083411; 
+	f1 += tex2Dlod(s1, uv + float2(       0,  1.90313) * tx, 0).x * 0.121987; 
+	f1 += tex2Dlod(s1, uv + float2( 1.90313,  1.90313) * tx, 0).x * 0.083411;
+#else 
 	f0 = f1 = 0;
 	float wsum = 0;
 	float2 tx = rcp(tex2Dsize(s0));
@@ -458,6 +480,7 @@ void downsample_features(sampler s0, sampler s1, float2 uv, out float f0, out fl
 	}
 
 	f0 /= wsum; f1 /= wsum;
+#endif
 }
 
 void DownsampleFeaturesPS1(in VSOUT i, out float f0 : SV_Target0, out float f1 : SV_Target1){downsample_features(sFlowFeaturesCurrL0, sFlowFeaturesPrevL0, i.uv, f0, f1);} 

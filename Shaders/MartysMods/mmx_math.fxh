@@ -26,7 +26,13 @@ static const float TAU     = 6.2831853072;
 static const float FLOAT32MAX = 3.402823466e+38f;
 static const float FLOAT16MAX = 65504.0;
 
-//Useful math functions
+#if _BITWISE_SUPPORTED 
+static const uint  NAN_BITS = 0x7FC00000u; //cannot use asfloat in global scope :(
+#endif
+
+#ifndef _MARTYSMODS_NO_OPT
+ #define _MARTYSMODS_NO_OPT     0   //for debug on user systems, allows to bypass all fast math
+#endif
 
 namespace Math 
 {
@@ -35,24 +41,69 @@ namespace Math
 	Fast Math
 =============================================================================*/
 
-float fast_sign(float x){return x >= 0.0 ? 1.0 : -1.0;}
+#if _MARTYSMODS_NO_OPT
+
+uint fast_umod(uint a, uint b){return a % b;}
+int  fast_imod( int a,  int b){return a % b;}
+
+float  fast_sign(float  x){return sign(x);}
+float2 fast_sign(float2 x){return sign(x);}
+float3 fast_sign(float3 x){return sign(x);}
+float4 fast_sign(float4 x){return sign(x);}
+
+float  fast_acos(float  x) {return acos(x);}
+float2 fast_acos(float2 x) {return acos(x);}
+float3 fast_acos(float3 x) {return acos(x);}
+float4 fast_acos(float4 x) {return acos(x);}
+
+float fast_atan2(float y, float x){return atan2(x);}
+
+#else //_MARTYSMODS_NO_OPT
+
+uint fast_umod(uint a, uint b){return a - uint(float(a) / float(b)) * b;}
+int  fast_imod( int a,  int b){return a -  int(float(a) / float(b)) * b;}
+
+float  fast_sign(float  x){return x >= 0.0 ? 1.0 : -1.0;}
 float2 fast_sign(float2 x){return x >= 0.0.xx ? 1.0.xx : -1.0.xx;}
 float3 fast_sign(float3 x){return x >= 0.0.xxx ? 1.0.xxx : -1.0.xxx;}
 float4 fast_sign(float4 x){return x >= 0.0.xxxx ? 1.0.xxxx : -1.0.xxxx;}
 
-float fast_acos(float x)                      
+float fast_acos(float x) //selfmade                
 {                                                   
-    float o = -0.156583 * abs(x) + HALF_PI;
-    o *= sqrt(1.0 - abs(x));              
-    return x >= 0.0 ? o : PI - o;                   
+    float o = sqrt(mad(abs(x), mad(abs(x), 0.5405464, -3.0079475), 2.4674011));
+    return x < 0.0 ? PI - o : o;                   
 }
 
 float2 fast_acos(float2 x)                      
 {                                                   
-    float2 o = -0.156583 * abs(x) + HALF_PI;
-    o *= sqrt(1.0 - abs(x));              
-    return x >= 0.0.xx ? o : PI - o;                   
+    float2 o = sqrt(mad(abs(x), mad(abs(x), 0.5405464, -3.0079475), 2.4674011));
+    return x < 0.0.xx ? PI - o : o;                   
 }
+
+float3 fast_acos(float3 x)                      
+{                                                   
+    float3 o = sqrt(mad(abs(x), mad(abs(x), 0.5405464, -3.0079475), 2.4674011));
+    return x < 0.0.xxx ? PI - o : o;                   
+}
+
+float4 fast_acos(float4 x)                      
+{                                                   
+    float4 o = sqrt(mad(abs(x), mad(abs(x), 0.5405464, -3.0079475), 2.4674011));
+    return x < 0.0.xxxx ? PI - o : o;                   
+}
+
+float fast_atan2(float y, float x)
+{
+    float2 v = float2(x, y);
+    bool a = abs(v.y) < abs(v.x);
+    v = a ? v.yx : v.xy;
+    float s = v.x / v.y;    
+    s *= mad(abs(s), -0.273, 1.0584);
+    float addv = y > 0 ? PI : -PI;    
+    return a ? ((x < 0 ? addv : 0) + s) : (0.5 * addv - s);
+}
+
+#endif //_MARTYSMODS_NO_OPT
 
 /*=============================================================================
 	Geometry
