@@ -1330,14 +1330,59 @@ void AlbedoMainPS(in VSOUT i, out float3 o : SV_Target0)
     float4 m = 0;
     float ws = 0.0;
 
-    [unroll]for(int y = -1; y <= 1; y++) 
-    [unroll]for(int x = -1; x <= 1; x++)    
-    {
-        float2 t = tex2D(sFusedAlbedoPyramid, i.uv, int2(x, y)).xy;
-        float w = exp(-(x * x + y * y));
-        m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
-        ws += w;
-    }    
+    // Manually unroll to fix an issue where int2(x, y) can't be identified as a constant expression on OpenGL.
+	// See: https://github.com/martymcmodding/iMMERSE/issues/24
+	//
+    //	[unroll]for(int y = -1; y <= 1; y++)
+    //	[unroll]for(int x = -1; x <= 1; x++)
+	//	{
+	
+	float2 t = tex2D(sFusedAlbedoPyramid, i.uv, int2(-1, -1)).xy;
+	float w = exp(-2); // exp(-(x * x + y * y));
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	t = tex2D(sFusedAlbedoPyramid, i.uv, int2(0, -1)).xy;
+	w = exp(-1);
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	t = tex2D(sFusedAlbedoPyramid, i.uv, int2(1, -1)).xy;
+	w = exp(-2);
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	t = tex2D(sFusedAlbedoPyramid, i.uv, int2(-1, 0)).xy;
+	w = exp(-1);
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	t = tex2D(sFusedAlbedoPyramid, i.uv, int2(0, 0)).xy;
+	w = exp(0);
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	t = tex2D(sFusedAlbedoPyramid, i.uv, int2(1, 0)).xy;
+	w = exp(-1);
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	t = tex2D(sFusedAlbedoPyramid, i.uv, int2(-1, 1)).xy;
+	w = exp(-2);
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	t = tex2D(sFusedAlbedoPyramid, i.uv, int2(0, 1)).xy;
+	w = exp(-1);
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	t = tex2D(sFusedAlbedoPyramid, i.uv, int2(1, 1)).xy;
+	w = exp(-2);
+	m += float4(t.y, t.y * t.y, t.y * t.x, t.x) * w;
+	ws += w;
+
+	// }
 
     m /= ws;    
     float a = (m.z - m.x * m.w) / (max(m.y - m.x * m.x, 0.0) + 0.00001);
