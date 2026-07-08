@@ -196,7 +196,7 @@ float3 sample_vndf_bounded(float3 wi, float2 alpha, float2 u, float coverage, ou
 float3 sample_vndf_bounded_iso(float3 wi, float3 n, float alpha, float2 u, float coverage, out float pdf_ratio)
 {
     //decompose into tangential and orthogonal
-    float wi_z = dot(wi, n);
+    float wi_z = saturate(dot(wi, n));
     float3 wi_xy = wi - wi_z * n;    
     //preliminary variables
     float a = saturate(alpha);
@@ -220,7 +220,7 @@ float3 sample_vndf_bounded_iso(float3 wi, float3 n, float alpha, float2 u, float
     sincos(u.x * TAU, c_std.x, c_std.y);
     c_std.xy *= sqrt(saturate(1.0 - c_std.z * c_std.z));
     //reflect sample to align with normal
-    float3 wr = float3(n.xy, n.z + 1);
+    float3 wr = float3(n.xy, n.z + 1.00001);//NaNs
     float3 c = (dot(wr, c_std) / wr.z) * wr - c_std;
     //compute halfway direction as standard normal
     float3 wm_std = c + wiStd;

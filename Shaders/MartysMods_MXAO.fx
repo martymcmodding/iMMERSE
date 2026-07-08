@@ -39,7 +39,7 @@
 =============================================================================*/
 
 #ifndef MXAO_AO_TYPE
- #define MXAO_AO_TYPE       0
+ #define MXAO_AO_TYPE                     0
 #endif 
 
 #ifndef MXAO_USE_LAUNCHPAD_NORMALS
@@ -586,7 +586,6 @@ float2 MXAOFused(uint2 screenpos, float4 uv)
 #if MXAO_AO_TYPE == 2
                     //this almost perfectly approximates inverse transform sampling for cosine lobe
                     h_frontback = h_frontback * h_frontback * (3.0 - 2.0 * h_frontback); 
-                    //if(tempF1.y > 0) h_frontback = saturate(h_frontback + QMC::roberts1(slice_count * sample_count + _sample, jitter.y) / 32.0);
 #endif                   
                     process_horizons(h_frontback);
 #endif  //MXAO_AO_TYPE
@@ -830,6 +829,10 @@ technique MartysMods_MXAO
         "______________________________________________________________________________";
 >
 { 
+#if MXAO_USE_LAUNCHPAD_NORMALS
+    IPC_REQUEST_FEATURE(MARTYSMODS_IPC_FEATURE_NORMALS)
+#endif
+
 #if _COMPUTE_SUPPORTED
     pass 
     { 
@@ -850,11 +853,12 @@ technique MartysMods_MXAO
 #endif
 
 #ifdef _MARTYSMODS_TAAU_SCALE
+    IPC_REQUEST_FEATURE(MARTYSMODS_IPC_FEATURE_OPTICALFLOW)
     pass { VertexShader = MainVS; PixelShader = TemporalBlendPS; RenderTarget0 = MXAOTexTmp; }
     pass { VertexShader = MainVS; PixelShader = TemporalUpdatePS; RenderTarget = MXAOTexAccum; }    
 #else//_MARTYSMODS_TAAU_SCALE
     pass { VertexShader = MainVS; PixelShader = Filter1PS; RenderTarget = MXAOTex2; }
 #endif//_MARTYSMODS_TAAU_SCALE
 
-    pass { VertexShader = MainVS; PixelShader = Filter2PS; }
+    pass { VertexShader = MainVS; PixelShader = Filter2PS; }    
 }
